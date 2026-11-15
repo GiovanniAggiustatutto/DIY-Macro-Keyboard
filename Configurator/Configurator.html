@@ -1,0 +1,4628 @@
+<!DOCTYPE html>
+<!--
+  MacroPad Configurator
+  Browser editor for MacroPad profiles: pages of 12 keys, each with a label
+  shown on the OLED screens and up to two actions (shortcut, media, MIDI,
+  text or device command). Profiles are imported and exported as JSON files
+  read by the firmware.
+  Single self-contained file (CSS, markup and script), no external
+  dependencies: it also works offline.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MacroPad Configurator</title>
+<style>
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+
+:root{
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --bg:        #08090b;
+  --surface:   #0e1015;
+  --surface-2: #171a21;
+  --surface-3: #1f242c;
+  --sunken:    #090b0e;
+  /* Translucent fill for layers floating above the panels (toasts) */
+  --float:     rgba(37,42,51,.9);
+
+  --line:      #343b47;
+  --line-2:    #48505d;
+
+  /* Text tiers: even the dimmest keeps a 7:1 contrast against the panels */
+  --text:      #f8fafd;
+  --text-2:    #d2d8e3;
+  --text-3:    #a4adbb;
+
+  --accent:    #eef1f6;
+  --accent-2:  #d3d9e3;
+  --accent-ink:#0c0e12;
+  --accent-dim:rgba(238,241,246,.16);
+
+  /* Switches use green, so on / off is readable at a glance */
+  --toggle:    #3ad07f;
+  --toggle-2:  #22a862;
+  --toggle-ink:#04160c;
+
+  /* Action colours: blue = file operations, green = add / enable,
+     red = remove. Each hue has a solid variant for primary buttons and a
+     tonal one (same hue at low opacity) for secondary buttons */
+  --blue:      #4a90ff;
+  --blue-2:    #2f6df0;
+  --blue-ink:  #f4f8ff;
+  --blue-soft: rgba(74,144,255,.15);
+  --blue-line: rgba(74,144,255,.38);
+
+  --green:      #3ad07f;
+  --green-ink:  #04160c;
+  --green-soft: rgba(58,208,127,.15);
+  --green-line: rgba(58,208,127,.38);
+
+  --danger:   #ff5f55;
+  --red-soft: rgba(255,95,85,.15);
+  --red-line: rgba(255,95,85,.4);
+
+  --ok:        #46d39a;
+  --amber:     #ffb020;
+
+  /* Max width of the device preview: scales with the window, within limits */
+  --device-max: clamp(646px, 46vw, 920px);
+
+  --r-lg: 14px;
+  --r-md: 10px;
+  --r-sm: 7px;
+
+  /* Panels and cards / popup menus */
+  --shadow-panel: 0 2px 4px rgba(0,0,0,.3);
+  --shadow-pop:   0 12px 28px -10px rgba(0,0,0,.85);
+  /* Floating layers (toasts): contact, near and ambient shadow */
+  --shadow-float: 0 1px 2px rgba(0,0,0,.5),
+                  0 8px 18px -6px rgba(0,0,0,.7),
+                  0 26px 46px -18px rgba(0,0,0,.95);
+  --ease: cubic-bezier(.4,.1,.2,1);
+  --spring: cubic-bezier(.34,1.56,.64,1);
+}
+
+/* Transitions are disabled until the first paint (the class is removed at
+   boot), so the UI built by JS does not animate in on load */
+body.preload *, body.preload *::before, body.preload *::after{
+  transition:none !important; animation:none !important;
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+
+html,body{ height:100%; }
+
+/* Type scale: 1rem is 10px on wide screens, down to 9.375px at laptop widths.
+   All font sizes are in rem, except the device preview labels, which scale in
+   vw together with the chassis */
+html{ font-size:clamp(9.375px, 6.9px + 0.173vw, 10px); }
+
+body{
+  margin:0;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  font-family:var(--sans);
+  font-size:1.6rem;
+  line-height:1.45;
+  color:var(--text);
+  background:
+    radial-gradient(1100px 480px at 50% -220px, rgba(238,241,246,.055), transparent 70%),
+    var(--bg);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+button{ font:inherit; color:inherit; background:none; border:0; padding:0; cursor:pointer; }
+input,textarea,select{ font:inherit; color:inherit; }
+h1,h2,h3,p{ margin:0; }
+
+/* Focus rings only during keyboard navigation: .kbd-nav is added on Tab and
+   removed on pointer input (see setupFocusRing) */
+:focus-visible{ outline:none; }
+.kbd-nav :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+.mono{ font-family:var(--mono); }
+
+/* ---------- scrollbars ---------- */
+.scroller{ scrollbar-width:thin; scrollbar-color:#4a5361 transparent; }
+.scroller::-webkit-scrollbar{ width:11px; height:11px; }
+.scroller::-webkit-scrollbar-track{ background:transparent; margin:6px 0; }
+.scroller::-webkit-scrollbar-thumb{
+  background-color:#4a5361;
+  background-clip:padding-box;
+  border:3px solid transparent;
+  border-radius:99px;
+}
+.scroller::-webkit-scrollbar-thumb:hover{ background-color:#5c6674; }
+.scroller::-webkit-scrollbar-corner{ background:transparent; }
+
+/* ============================================================
+   TOP BAR
+   ============================================================ */
+.topbar{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:18px;
+  padding:11px 18px;
+  background:rgba(14,16,20,.88);
+  border-bottom:1px solid var(--line);
+  position:relative;
+  z-index:40;
+}
+
+.brand{ display:flex; align-items:center; gap:11px; min-width:0; }
+.brand-mark{
+  width:34px; height:34px; flex:0 0 auto;
+  display:grid; place-items:center;
+  border-radius:8px;
+  color:var(--accent-ink);
+  background:var(--accent);
+}
+.brand-name{
+  display:flex; align-items:center; gap:8px;
+  font-size:1.45rem; font-weight:700;
+  letter-spacing:.14em; text-transform:uppercase;
+}
+
+.chip{
+  font-family:var(--mono);
+  font-size:1.15rem; font-weight:600;
+  letter-spacing:.04em;
+  padding:2px 7px;
+  border-radius:99px;
+  color:var(--accent);
+  background:var(--accent-dim);
+  border:1px solid rgba(238,241,246,.28);
+}
+
+.topbar-spacer{ flex:1 1 auto; }
+.topbar-tools{ display:flex; align-items:center; gap:9px; }
+
+/* Profile name field */
+.profile-field{
+  display:flex; align-items:center; gap:9px;
+  height:36px; padding:0 12px;
+  background:var(--sunken);
+  border:1px solid var(--line);
+  border-radius:var(--r-md);
+  transition:border-color .18s var(--ease);
+}
+.profile-field:focus-within{ border-color:var(--line-2); }
+.profile-field > span{
+  font-size:1.15rem; font-weight:600; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--text-3);
+}
+.profile-field input{
+  width:210px; border:0; background:none; outline:none;
+  font-size:1.5rem; font-weight:500;
+}
+.profile-field input::placeholder{ color:var(--text-3); }
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  height:34px; padding:0 13px;
+  border-radius:var(--r-md);
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  color:var(--text-2);
+  font-size:1.45rem; font-weight:600;
+  white-space:nowrap;
+  transition:background .16s var(--ease), border-color .16s var(--ease), color .16s var(--ease);
+}
+.btn:hover{ background:var(--surface-3); border-color:var(--line-2); color:var(--text); }
+.btn:active{ transform:translateY(1px); }
+.btn svg{ flex:0 0 auto; }
+.btn-sm{ height:27px; padding:0 9px; gap:5px; border-radius:var(--r-sm); font-size:1.25rem; }
+
+/* -- solid: primary actions -- */
+.btn-primary{ border-color:transparent; background:var(--accent); color:var(--accent-ink); }
+.btn-primary:hover{ background:#fff; border-color:transparent; color:var(--accent-ink); }
+.btn-blue{ border-color:transparent; background:var(--blue); color:var(--blue-ink); }
+.btn-blue:hover{ background:#69a4ff; border-color:transparent; color:var(--blue-ink); }
+.btn-green{ border-color:transparent; background:var(--green); color:var(--green-ink); }
+.btn-green:hover{ background:#57dd94; border-color:transparent; color:var(--green-ink); }
+
+/* -- tonal: secondary actions, same hue at low opacity -- */
+.btn-t-blue { color:#9cc2ff;      background:var(--blue-soft);  border-color:var(--blue-line); }
+.btn-t-blue:hover { color:#cbdfff; background:rgba(74,144,255,.25); border-color:rgba(74,144,255,.6); }
+.btn-t-green{ color:var(--green); background:var(--green-soft); border-color:var(--green-line); }
+.btn-t-green:hover{ color:#7cf0b4; background:rgba(58,208,127,.25); border-color:rgba(58,208,127,.6); }
+.btn-t-red  { color:var(--danger);background:var(--red-soft);   border-color:var(--red-line); }
+.btn-t-red:hover  { color:#ff8f88; background:rgba(255,95,85,.25); border-color:rgba(255,95,85,.6); }
+
+.btn-icon{
+  width:28px; height:28px; padding:0;
+  display:grid; place-items:center;
+  border-radius:var(--r-sm);
+  border:1px solid transparent;
+  color:var(--text-3);
+  transition:background .16s var(--ease), color .16s var(--ease);
+}
+.btn-icon:hover{ background:var(--surface-3); color:var(--text); }
+.btn-icon:disabled{ opacity:.3; cursor:default; background:none; color:var(--text-3); }
+.btn-icon.danger{ background:var(--red-soft); color:var(--danger); }
+.btn-icon.danger:hover{ background:rgba(255,95,85,.28); color:#ff8f88; }
+.btn-icon.success{ background:var(--green-soft); color:var(--green); }
+.btn-icon.success:hover{ background:rgba(58,208,127,.28); color:#7cf0b4; }
+
+/* Hidden file input, opened through its <label> styled as a button */
+.file-input{ position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+
+/* ============================================================
+   WORKSPACE / PANELS
+   ============================================================ */
+.workspace{
+  flex:1 1 auto;
+  display:grid;
+  /* Pages | preview | key editor: the side panels share the same width,
+     the preview column takes the remaining space */
+  grid-template-columns:minmax(300px,.5fr) minmax(0,1fr) minmax(300px,.5fr);
+  gap:14px;
+  padding:14px;
+  overflow:hidden;
+  min-height:0;
+}
+
+.panel{
+  display:flex; flex-direction:column;
+  min-height:0; min-width:0;
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  box-shadow:var(--shadow-panel);
+  overflow:hidden;
+}
+
+.panel-head{
+  flex:0 0 auto;
+  display:flex; align-items:center; gap:10px;
+  /* Fixed min height, so the three panel heads line up */
+  min-height:57px;
+  padding:13px 15px;
+  border-bottom:1px solid var(--line);
+}
+.panel-head h2{
+  flex:1 1 auto;
+  font-size:1.25rem; font-weight:700;
+  letter-spacing:.14em; text-transform:uppercase;
+  color:var(--text-2);
+}
+.panel-head .glyph{ color:var(--text-3); display:flex; }
+
+/* Counter badge next to a panel title */
+.head-count{
+  font-family:var(--mono); font-size:1.15rem; font-weight:700;
+  padding:2px 7px;
+  border-radius:99px;
+  color:var(--text-3);
+  background:var(--surface-3);
+}
+
+.panel-body{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  padding:14px;
+}
+
+/* ============================================================
+   FORM PRIMITIVES
+   ============================================================ */
+.field{ display:flex; flex-direction:column; gap:7px; }
+/* display:flex overrides the browser [hidden] rule, so restore it */
+.field[hidden]{ display:none; }
+/* Field disabled by a related switch (e.g. the standby timeout) */
+.field.is-off{ opacity:.4; pointer-events:none; }
+.field + .field{ margin-top:16px; }
+
+.label{
+  font-size:1.15rem; font-weight:700;
+  letter-spacing:.13em; text-transform:uppercase;
+  color:var(--text-3);
+}
+/* Short helper text under a control */
+.hint{ font-size:1.25rem; color:var(--text-3); line-height:1.4; }
+/* Hint with extra space above it (inside a .field the flex gap adds 7px) */
+.hint.hint-spaced{ margin-top:12px; }
+.field > .hint.hint-spaced{ margin-top:7px; }
+.hint.hint-spaced + .field{ margin-top:16px; }
+.hint.hint-spaced[hidden]{ display:none; }
+.counter{
+  align-self:flex-end;
+  font-family:var(--mono);
+  font-size:1.15rem; color:var(--text-3);
+  margin-top:-2px;
+}
+/* Text input with its character counter inside the box, on the right */
+.counted{ position:relative; }
+.counted .input{ padding-right:52px; }
+.counted .counter{
+  position:absolute; right:10px; top:50%;
+  transform:translateY(-50%);
+  margin:0;
+  pointer-events:none;
+}
+
+.input{
+  width:100%;
+  height:38px;
+  padding:0 12px;
+  border-radius:var(--r-md);
+  border:1px solid var(--line);
+  background:var(--sunken);
+  color:var(--text);
+  font-size:1.5rem;
+  outline:none;
+  transition:border-color .18s var(--ease), background .18s var(--ease);
+}
+.input:hover{ border-color:var(--line-2); }
+.input:focus{ border-color:var(--accent); background:#0b0d11; }
+.input::placeholder{ color:var(--text-3); }
+.input.mono{ font-family:var(--mono); font-size:1.4rem; }
+
+textarea.input{
+  height:auto;
+  min-height:96px;
+  padding:10px 12px;
+  line-height:1.6;
+  resize:none;
+  font-family:var(--mono);
+  font-size:1.4rem;
+}
+textarea.input::-webkit-scrollbar-corner{ background-color:transparent; }
+
+/* -- toggle switch: hidden checkbox + .track -- */
+.switch{ position:relative; display:inline-flex; flex:0 0 auto; cursor:pointer; }
+.switch input{ position:absolute; opacity:0; width:0; height:0; }
+.switch .track{
+  position:relative;
+  width:40px; height:22px;
+  border-radius:99px;
+  background:#333a45;
+  border:1px solid var(--line-2);
+  overflow:hidden;
+  transition:background .3s var(--ease), border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+/* ::before is the green "on" fill, scaling out from the knob; ::after is the knob */
+.switch .track::before{
+  content:"";
+  position:absolute; inset:-1px;
+  border-radius:99px;
+  background:linear-gradient(160deg,var(--toggle),var(--toggle-2));
+  transform:scale(.2);
+  transform-origin:14% 50%;
+  opacity:0;
+  transition:transform .34s var(--spring), opacity .2s var(--ease);
+}
+.switch .track::after{
+  content:"";
+  position:absolute; top:2px; left:2px;
+  width:16px; height:16px;
+  border-radius:99px;
+  background:#9aa2ad;
+  transition:transform .34s var(--spring), width .18s var(--ease), background .24s var(--ease);
+}
+.switch input:checked + .track{
+  border-color:transparent;
+  box-shadow:0 0 13px -3px rgba(58,208,127,.55);
+}
+.switch input:checked + .track::before{ transform:scale(1); opacity:1; }
+.switch input:checked + .track::after{ transform:translateX(18px); background:var(--toggle-ink); }
+/* Pressed: the knob stretches towards its destination */
+.switch:active .track::after{ width:21px; }
+.switch:active input:checked + .track::after{ transform:translateX(13px); }
+.kbd-nav .switch input:focus-visible + .track{ outline:2px solid var(--toggle); outline-offset:2px; }
+
+/* -- switch inside a bordered row -- */
+.row-toggle{
+  display:flex; align-items:center; gap:12px;
+  padding:11px 12px;
+  border:1px solid var(--line);
+  border-radius:var(--r-md);
+  background:var(--surface-2);
+}
+.row-toggle .row-text{ flex:1 1 auto; min-width:0; }
+.row-toggle .row-title{
+  display:block;
+  font-size:1.4rem; font-weight:600;
+  color:var(--text);
+}
+
+/* -- radio cards: hidden radio + dot, with a title and a description -- */
+.choices{ display:grid; gap:7px; }
+.choice{
+  display:flex; align-items:flex-start; gap:11px;
+  padding:11px 12px;
+  border:1px solid var(--line);
+  border-radius:var(--r-md);
+  background:var(--surface-2);
+  cursor:pointer;
+  transition:border-color .18s var(--ease), background .18s var(--ease);
+}
+.choice:hover{ border-color:var(--line-2); }
+.choice input{ position:absolute; opacity:0; width:0; height:0; }
+.choice .dot{
+  position:relative; flex:0 0 auto;
+  width:16px; height:16px; margin-top:1px;
+  border-radius:99px;
+  border:1px solid var(--line-2);
+  background:var(--sunken);
+  transition:border-color .24s var(--ease);
+}
+/* Selected dot scales in with the same spring as the switch */
+.choice .dot::after{
+  content:"";
+  position:absolute; inset:3px;
+  border-radius:99px;
+  background:var(--accent);
+  transform:scale(.2); opacity:0;
+  transition:transform .3s var(--spring), opacity .18s var(--ease);
+}
+.choice:has(input:checked){ border-color:rgba(238,241,246,.45); background:var(--surface-3); }
+.choice input:checked + .dot{ border-color:var(--accent); }
+.choice input:checked + .dot::after{ transform:scale(1); opacity:1; }
+.kbd-nav .choice input:focus-visible + .dot{ outline:2px solid var(--accent); outline-offset:2px; }
+.choice.is-picked{ border-color:var(--accent-dim); background:var(--surface-3); }
+.choice-text{ flex:1 1 auto; min-width:0; }
+.choice-title{
+  display:block;
+  font-size:1.45rem; font-weight:600;
+  color:var(--text-2);
+}
+.choice.is-picked .choice-title{ color:var(--text); }
+.choice-sub{ display:block; margin-top:2px; font-size:1.25rem; color:var(--text-3); }
+
+/* -- number stepper -- */
+.stepper{ position:relative; }
+.stepper .input{ padding-right:34px; font-family:var(--mono); }
+.stepper .unit{
+  position:absolute; right:32px; top:50%; transform:translateY(-50%);
+  font-family:var(--mono); font-size:1.15rem;
+  letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-3); pointer-events:none;
+}
+.stepper .unit + .input{ padding-right:62px; }
+.stepper-arrows{
+  position:absolute; right:4px; top:4px; bottom:4px;
+  display:flex; flex-direction:column; justify-content:center; gap:2px;
+}
+.stepper-arrows button{
+  display:grid; place-items:center;
+  width:22px; height:13px;
+  border-radius:4px;
+  color:var(--text-3);
+  transition:color .14s var(--ease), background .14s var(--ease);
+}
+.stepper-arrows button:hover{ color:var(--text); background:rgba(255,255,255,.1); }
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+.stepper input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+
+/* ============================================================
+   SELECT + AUTOCOMPLETE MENUS
+   ============================================================ */
+.select{ position:relative; }
+.select > select{ display:none; }
+.select-trigger{
+  position:relative;
+  display:flex; align-items:center;
+  width:100%; height:38px;
+  padding:0 34px 0 12px;
+  border-radius:var(--r-md);
+  border:1px solid var(--line);
+  background:var(--sunken);
+  font-size:1.5rem; text-align:left;
+  transition:border-color .18s var(--ease);
+}
+.select-trigger:hover{ border-color:var(--line-2); }
+/* Flex box, so the span is as tall as its glyph and stays vertically centred */
+.select-trigger .caret{
+  position:absolute; right:11px; top:50%;
+  display:flex; align-items:center; justify-content:center;
+  transform:translateY(-50%);
+  color:var(--text-3); pointer-events:none;
+  transition:transform .18s var(--ease), color .18s var(--ease);
+}
+.select.open .select-trigger{ border-color:var(--accent); }
+.select.open .select-trigger .caret{ transform:translateY(-50%) rotate(180deg); color:var(--accent); }
+.select-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Icon of the selected option, copied into the trigger label */
+.select-label .opt-icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:15px; margin-right:7px; vertical-align:-2px;
+}
+
+.menu{
+  position:absolute; top:calc(100% + 6px); left:0; right:0;
+  z-index:50;
+  padding:5px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-md);
+  background:var(--surface-2);
+  box-shadow:var(--shadow-pop);
+}
+.menu[hidden]{ display:none; }
+.menu.scrolling{ max-height:206px; overflow-y:auto; }
+
+.opt{
+  display:flex; align-items:center; gap:9px;
+  width:100%;
+  padding:8px 10px;
+  border-radius:var(--r-sm);
+  font-size:1.45rem; font-weight:500;
+  color:var(--text-2);
+  text-align:left;
+  transition:background .14s var(--ease), color .14s var(--ease);
+}
+.opt + .opt{ margin-top:1px; }
+.opt:hover{ background:rgba(255,255,255,.08); color:var(--text); }
+/* Currently selected option */
+.opt.active{ background:var(--accent); color:var(--accent-ink); font-weight:650; }
+.opt.mono{ font-family:var(--mono); font-size:1.4rem; padding:6px 10px; }
+.opt .opt-icon{ flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; width:15px; vertical-align:-3px; color:var(--text-3); }
+.opt:hover .opt-icon{ color:var(--text-2); }
+.opt.active .opt-icon{ color:inherit; }
+
+/* Page selector options: page name, plus an icon on pages hidden on the device */
+.opt .opt-text{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.opt .icon-hidden{ flex:none; margin-left:auto; color:var(--text-3); }
+.opt.active .icon-hidden{ color:inherit; }
+.select-label .icon-hidden{ margin-left:6px; vertical-align:-2px; color:var(--text-3); }
+
+/* Menus are absolutely positioned and do not extend the scroll area: this
+   spacer grows while a menu is open, so it can be scrolled into view
+   (see reserveMenuSpace) */
+.menu-spacer{ height:0; pointer-events:none; }
+
+/* ============================================================
+   SEGMENTED PICKER
+   Action type selector: one button per type, the active one filled.
+   ============================================================ */
+.segmented{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:3px;
+  padding:3px;
+  border:1px solid var(--line);
+  border-radius:var(--r-md);
+  background:var(--sunken);
+}
+.seg{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+  min-height:46px; padding:6px 2px;
+  border-radius:var(--r-sm);
+  color:var(--text-3);
+  transition:background .15s var(--ease), color .15s var(--ease);
+}
+.seg span{
+  font-size:1.15rem; font-weight:600;
+  max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.seg:hover{ background:rgba(255,255,255,.07); color:var(--text-2); }
+.seg.is-on{ background:var(--accent); color:var(--accent-ink); }
+.seg.is-on:hover{ background:#fff; color:var(--accent-ink); }
+
+/* ============================================================
+   TAGS (shortcut key list)
+   ============================================================ */
+.tag-box{
+  display:flex; flex-wrap:wrap; align-items:flex-start; gap:6px;
+  min-height:50px;
+  padding:9px;
+  border:1px solid var(--line);
+  border-radius:var(--r-md);
+  background:var(--sunken);
+}
+.tag{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 6px 4px 10px;
+  border-radius:99px;
+  border:1px solid var(--line-2);
+  background:var(--surface-3);
+  font-family:var(--mono); font-size:1.2rem;
+  color:var(--text-2);
+}
+.tag button{
+  display:grid; place-items:center;
+  width:15px; height:15px;
+  color:var(--text-3);
+  transition:color .14s var(--ease);
+}
+.tag button:hover{ color:var(--text); }
+.tag-empty{ font-size:1.35rem; color:var(--text-3); font-style:italic; padding:5px 2px; }
+
+.quick-keys{ display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
+.quick-keys button{
+  padding:6px 0;
+  border-radius:var(--r-sm);
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  font-family:var(--mono); font-size:1.2rem;
+  color:var(--text-3);
+  transition:background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
+}
+.quick-keys button:hover{ background:var(--surface-3); border-color:var(--line-2); color:var(--text); }
+/* The ⌘ glyph renders small in monospace fonts: enlarge it without changing
+   the line height */
+.quick-keys .glyph{ font-size:1.6rem; line-height:0; vertical-align:-2px; }
+
+/* ---- shortcut capture ---- */
+/* Label row with the capture button aligned right */
+.field-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.capture-btn{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 9px;
+  border-radius:99px;
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  font-size:1.15rem; font-weight:700;
+  letter-spacing:.09em; text-transform:uppercase;
+  color:var(--text-3);
+  transition:background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
+}
+.capture-btn:hover{ background:var(--surface-3); border-color:var(--line-2); color:var(--text); }
+.capture-btn .capture-dot{
+  width:6px; height:6px; border-radius:99px;
+  background:var(--text-3);
+  transition:background .15s var(--ease);
+}
+.capture-btn.is-recording{
+  background:rgba(254,70,70,.14);
+  border-color:rgba(254,70,70,.5);
+  color:var(--danger);
+}
+.capture-btn.is-recording .capture-dot{ background:var(--danger); animation:capture-pulse 1.1s var(--ease) infinite; }
+
+@keyframes capture-pulse{
+  0%,100%{ opacity:1;   transform:scale(1); }
+  50%    { opacity:.35; transform:scale(.8); }
+}
+
+/* While recording, the tag box previews the keys as they are pressed */
+.tag-box.is-capturing{ border-color:rgba(254,70,70,.5); background:rgba(254,70,70,.05); }
+.tag.is-live{ border-color:rgba(254,70,70,.45); background:rgba(254,70,70,.12); color:var(--text); padding-right:10px; }
+
+/* ============================================================
+   DIVIDERS / SECTION TITLES
+   ============================================================ */
+.divider{
+  display:flex; align-items:center; gap:10px;
+  margin:20px 0 14px;
+  font-size:1.15rem; font-weight:700;
+  letter-spacing:.13em; text-transform:uppercase;
+  color:var(--text-3);
+}
+.divider::after{ content:""; flex:1 1 auto; height:1px; background:var(--line); }
+
+/* -- settings dialog: category nav on the left, one tab pane at a time on
+      the right, button bar at the bottom -- */
+.settings-layout{
+  flex:1 1 auto; min-height:0;
+  display:grid;
+  grid-template-columns:184px minmax(0,1fr);
+}
+.settings-nav{
+  display:flex; flex-direction:column; gap:2px;
+  padding:9px;
+  border-right:1px solid var(--line);
+  background:var(--sunken);
+  overflow-y:auto;
+}
+.snav{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 10px;
+  border-radius:var(--r-sm);
+  font-size:1.4rem; font-weight:600;
+  color:var(--text-3);
+  text-align:left;
+  transition:background .15s var(--ease), color .15s var(--ease);
+}
+.snav svg{ flex:0 0 auto; }
+.snav:hover{ background:rgba(255,255,255,.06); color:var(--text-2); }
+.snav.is-on{ background:var(--accent); color:var(--accent-ink); }
+
+.settings-pane{
+  min-height:0;
+  overflow-y:auto;
+  padding:17px 19px 20px;
+}
+.settings-tab[hidden]{ display:none; }
+.tab-title{
+  margin:0 0 14px;
+  padding-bottom:11px;
+  border-bottom:1px solid var(--line);
+  font-size:1.7rem; font-weight:650;
+  color:var(--text);
+}
+
+.dialog-foot{
+  flex:0 0 auto;
+  display:flex; align-items:center; gap:8px;
+  padding:11px 15px;
+  border-top:1px solid var(--line);
+  background:var(--surface-2);
+}
+.dialog-foot .gap{ flex:1 1 auto; }
+
+.subform[hidden]{ display:none; }
+.subform{ margin-top:14px; }
+
+/* The second action form is in its own container, so the .field + .field
+   spacing after the delay field does not apply: set it here */
+#action-slot-2{ margin-top:16px; }
+
+/* ============================================================
+   CARD SECTIONS
+   Head + body cards used by the key editor (Display, Action,
+   Action 2) and, with the same structure, by the page list.
+   ============================================================ */
+.section{
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  background:var(--surface-2);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.02);
+}
+.section + .section{ margin-top:14px; }
+
+.section-head,
+.page-card-top{
+  display:flex; align-items:center; gap:9px;
+  /* Fits the switch in the Action 2 header, so all headers are the same height */
+  min-height:40px;
+  padding:7px 11px;
+  border-bottom:1px solid var(--line);
+  border-radius:var(--r-lg) var(--r-lg) 0 0;
+  background:var(--surface-3);
+}
+.section-head .switch{ margin-left:1px; }
+.section-head h3{
+  flex:1 1 auto;
+  font-size:1.2rem; font-weight:700;
+  letter-spacing:.13em; text-transform:uppercase;
+  color:var(--text-2);
+}
+.section-head .glyph{ flex:0 0 auto; display:flex; color:var(--text-3); }
+/* Enabled section (Action 2 switched on): green border and header */
+.section.is-on{ border-color:var(--green-line); }
+.section.is-on .section-head{ background:var(--green-soft); }
+.section.is-on .section-head h3,
+.section.is-on .section-head .glyph{ color:var(--green); }
+.section-body{ padding:12px; }
+/* Action 2 off: only the header is shown, so it takes the full rounded
+   shape. The bottom border is made transparent rather than removed, so the
+   header height does not change */
+#second-action-section:not(.is-on) .section-head{
+  border-bottom-color:transparent;
+  border-radius:var(--r-lg);
+}
+/* Nested rows use the darker background to stand out from the card */
+.section .row-toggle{ background:var(--sunken); }
+/* Only the header turns green: the body keeps the neutral background */
+.section.is-on .section-body{ background:var(--surface-2); border-radius:0 0 var(--r-lg) var(--r-lg); }
+
+/* ============================================================
+   PAGES COLUMN
+   ============================================================ */
+.pages-list{ display:flex; flex-direction:column; gap:11px; }
+
+/* Same card shell as .section, plus hover and active states */
+.page-card{
+  position:relative;
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  background:var(--surface-2);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.02);
+  cursor:pointer;
+  transition:border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+.page-card:hover{ border-color:var(--line-2); }
+.page-card.is-active{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(238,241,246,.1);
+}
+/* Head: page number on the left, move / delete buttons on the right */
+.page-card-top{ border-radius:var(--r-lg) var(--r-lg) 0 0; }
+.page-card-actions{ display:flex; align-items:center; gap:2px; margin-left:auto; }
+.page-card-top .btn-icon{ width:26px; height:26px; }
+.btn-icon.move:hover{ background:rgba(238,241,246,.14); color:var(--text); }
+/* Extra space between the move buttons and delete */
+.page-card-actions .danger{ margin-left:6px; }
+
+/* Body: page name input and visibility switch */
+.page-card-body{ display:flex; flex-direction:column; gap:9px; padding:11px; }
+.page-name{ min-width:0; }
+.page-card .page-name .input{ height:34px; font-size:1.45rem; font-weight:600; }
+/* Darker row background, as in .section */
+.page-card .row-toggle{ padding:8px 11px; background:var(--sunken); }
+
+.dot{
+  width:6px; height:6px; flex:0 0 auto;
+  border-radius:99px;
+  background:currentColor;
+  box-shadow:0 0 7px currentColor;
+}
+
+/* ============================================================
+   STAGE / DEVICE
+   ============================================================ */
+.stage{ background:var(--surface); }
+.stage-body{
+  flex:1 1 auto; min-height:0;
+  overflow-y:auto;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:16px;
+  /* Horizontal padding scales with the column and sets the margins beside
+     the device */
+  padding:22px clamp(32px,5.4%,104px);
+}
+
+.save-pill{
+  display:inline-flex; align-items:center; gap:7px;
+  padding:4px 10px 4px 9px;
+  border-radius:99px;
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  font-family:var(--mono); font-size:1.2rem;
+  letter-spacing:.03em;
+  color:var(--ok);
+  transition:color .2s var(--ease), border-color .2s var(--ease);
+}
+.save-pill.is-dirty{ color:var(--amber); border-color:rgba(255,176,32,.3); }
+
+/* -- chassis: styled like the other panels -- */
+.device{
+  width:100%; max-width:var(--device-max);
+  padding:clamp(20px,1.4vw,28px);
+  border-radius:var(--r-lg);
+  border:1px solid var(--line-2);
+  background:var(--surface-2);
+  box-shadow:0 2px 4px rgba(0,0,0,.3);
+}
+.device-grid{
+  display:grid;
+  /* Page key column | screens and keys: proportional, so both scale together */
+  grid-template-columns:minmax(0,118fr) minmax(0,464fr);
+  gap:clamp(20px,1.35vw,27px);
+}
+/* Page key column (screen + key), vertically centred against the main area */
+.device-side{
+  display:flex; flex-direction:column; justify-content:center; gap:24px;
+  padding-right:clamp(20px,1.35vw,27px);
+  border-right:1px solid var(--line);
+}
+.device-main{ display:flex; flex-direction:column; min-width:0; }
+.side-key{ display:grid; place-items:center; }
+
+/* -- OLED screens: sized relative to their column, so the whole device
+   scales together. 4 screens of 3 rows, one row per key -- */
+.screens{ display:grid; grid-template-columns:repeat(4,1fr); gap:clamp(14px,.95vw,19px); }
+
+.oled{
+  position:relative;
+  width:100%; max-width:93%;
+  margin:0 auto;
+  aspect-ratio:98/72;
+  display:flex; flex-direction:column;
+  border-radius:6px;
+  border:1px solid var(--line);
+  background:#000;
+  overflow:hidden;
+  user-select:none;
+}
+/* Page list scrollbar (see buildOledScrollbar). When it is shown the rows
+   leave a black strip free on the right, as on the device */
+.oled.has-bar .oled-row{ margin-right:5.47%; }
+.oled-bar{
+  position:absolute; right:0;
+  width:3.91%;
+  border-radius:2px;
+  background:#fff;
+}
+.oled-row{
+  flex:1 1 0;
+  display:flex; align-items:center;
+  min-width:0;
+  padding:0 7px;
+  background:#000;
+  color:#fff;
+  border-bottom:1px solid transparent;
+}
+.oled-row:last-child{ border-bottom:0; }
+.oled-row.inv{ background:#fff; color:#000; }
+.oled-row.sep-light{ border-bottom-color:rgba(255,255,255,.6); }
+.oled-row.sep-dark{ border-bottom-color:#000; }
+.oled-row span{
+  display:block;
+  width:100%;
+  font-family:var(--mono);
+  font-size:clamp(9px,.6vw,12.5px); font-weight:700;
+  letter-spacing:.06em;
+  text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* "BACK" row shown for a subpage: arrow and word centred together */
+.oled-row span.oled-back{
+  display:flex; align-items:center; justify-content:center; gap:.45em;
+}
+.oled-row span.oled-back svg{ width:.95em; height:.95em; flex:none; }
+
+/* Page menu prompt on the page key screen: cursor icon beside
+   "CHOOSE A / PAGE...", centred as one block. Sizes are scaled from the
+   firmware layout (11px font, 16x22px icon, 6px gaps) */
+.oled-row span.oled-menu{
+  display:flex; flex-direction:column; align-self:stretch;
+}
+.oled-row span.oled-menu-block{
+  flex:1;
+  display:flex; align-items:center; justify-content:center; gap:.4em;
+}
+.oled-menu-icon{ width:1.06em; height:1.46em; flex:none; }
+/* "n/N" screen counter in a band along the bottom, in the small font */
+.oled-row span.oled-menu-count{
+  flex:none; height:21.875%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:.65em; line-height:1;
+}
+.oled-row span.oled-menu-lines{
+  display:flex; flex-direction:column;
+  width:auto; line-height:1.13;
+}
+/* Ellipsis drawn as small squares on the baseline, as the firmware does */
+.oled-row span.oled-dots{
+  display:inline-flex; align-items:flex-end; gap:.066em;
+  width:auto; vertical-align:baseline;
+}
+.oled-dots i{ width:.2em; height:.2em; background:currentColor; }
+
+/* The page key column is narrower: its screen and key take a larger share */
+.device-side .oled{ max-width:100%; }
+.side-key .keycap{ max-width:87%; }
+
+/* -- keycaps -- */
+.keys{
+  margin-top:clamp(20px,1.35vw,27px);
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  grid-template-rows:repeat(3,auto);
+  grid-auto-flow:column;
+  gap:clamp(14px,.95vw,19px);
+}
+
+.keycap{
+  position:relative;
+  width:100%; max-width:80%;
+  margin:0 auto;
+  aspect-ratio:1/1;
+  display:grid; place-items:center;
+  padding:5px;
+  border-radius:10px;
+  border:1px solid var(--line-2);
+  background:var(--surface-3);
+  box-shadow:0 1px 2px rgba(0,0,0,.3);
+  transition:border-color .2s var(--ease), background .2s var(--ease),
+             box-shadow .2s var(--ease), transform .08s var(--ease),
+             filter .16s var(--ease);
+}
+.keycap .cap{
+  width:100%; height:100%;
+  display:grid; place-items:center;
+  padding:0 5px;
+  border-radius:7px;
+  border:1px solid rgba(255,255,255,.05);
+  background:rgba(9,11,14,.5);
+  transition:background .15s var(--ease), border-color .15s var(--ease);
+}
+.keycap .cap span{
+  max-width:100%;
+  font-size:clamp(9px,.58vw,12px); font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-2);
+  text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  transition:color .15s var(--ease);
+}
+/* Resting and selected colours are set inline from each key's colour
+   (see paintKeycap): hover only brightens them */
+.keycap:hover{ filter:brightness(1.3); }
+.keycap:active{ transform:translateY(2px) scale(.975); }
+.keycap.plain .cap span{ letter-spacing:.14em; }
+/* Page menu: key with no page assigned */
+.keycap.is-empty{ opacity:.34; cursor:default; }
+.keycap.is-empty:hover{ filter:none; }
+.keycap.is-empty:active{ transform:none; }
+
+.stage-tip{
+  font-size:1.3rem; color:var(--text-3);
+  text-align:center;
+}
+.stage-tip b{ color:var(--text-2); font-weight:600; }
+
+/* ============================================================
+   EMPTY STATE
+   ============================================================ */
+.empty{
+  flex:1 1 auto;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:12px; padding:26px; text-align:center;
+}
+.empty[hidden]{ display:none; }
+.empty .ring{
+  display:grid; place-items:center;
+  width:52px; height:52px;
+  border-radius:99px;
+  border:1px dashed var(--line-2);
+  color:var(--text-3);
+}
+.empty h3{ font-size:1.5rem; font-weight:600; color:var(--text-2); }
+.empty p{ font-size:1.3rem; color:var(--text-3); max-width:210px; }
+
+/* ============================================================
+   ID BADGES
+   Selected key in the key editor head, page number in each page card
+   ============================================================ */
+.key-id-badge,
+.page-index{
+  flex:0 0 auto;
+  font-family:var(--mono); font-size:1.25rem; font-weight:700;
+  padding:3px 10px;
+  border-radius:99px;
+  color:var(--accent);
+  background:var(--accent-dim);
+  border:1px solid rgba(238,241,246,.28);
+}
+/* Page numbers are neutral: only the active page is highlighted */
+.page-index{
+  display:grid; place-items:center;
+  width:22px; height:22px;
+  padding:0;
+  border-radius:6px;
+  color:var(--text-3);
+  background:var(--surface-3);
+  border-color:var(--line-2);
+  transition:color .18s var(--ease), background .18s var(--ease), border-color .18s var(--ease);
+}
+.page-card.is-active .page-index{
+  color:var(--accent-ink);
+  background:var(--accent);
+  border-color:var(--accent);
+}
+
+/* ============================================================
+   DIALOG + TOASTS
+   ============================================================ */
+.overlay{
+  /* Space above and below the dialog, also used by .dialog to cap its height */
+  --overlay-gap:clamp(28px,6vh,64px);
+  position:fixed; inset:0; z-index:200;
+  display:grid; place-items:center;
+  padding:var(--overlay-gap) 20px;
+  background:rgba(5,6,8,.72);
+}
+.overlay[hidden]{ display:none; }
+.dialog{
+  width:100%; max-width:380px;
+  max-height:calc(100vh - var(--overlay-gap) * 2);
+  overflow-y:auto;
+  padding:20px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-lg);
+  background:var(--surface);
+  box-shadow:0 30px 60px -25px rgba(0,0,0,1);
+  animation:dialog-in .2s var(--ease);
+}
+@keyframes dialog-in{
+  from{ opacity:0; transform:translateY(10px) scale(.98); }
+  to{ opacity:1; transform:none; }
+}
+.dialog-lg{ max-width:820px; }
+/* Fixed height: nav and pane scroll inside, so switching tab never resizes it */
+.dialog-settings{ height:min(540px, calc(100vh - var(--overlay-gap) * 2)); }
+/* Keeps short controls from stretching across the wide dialog */
+.field-narrow{ max-width:320px; }
+
+/* Dialog with a fixed title bar: only the body scrolls */
+.dialog-framed{
+  display:flex; flex-direction:column;
+  overflow:hidden;
+  padding:0;
+}
+.dialog-framed .dialog-head{
+  flex:0 0 auto;
+  margin:0;
+  padding:13px 15px;
+  border-bottom:1px solid var(--line);
+  background:var(--surface-2);
+}
+.dialog-body{
+  flex:1 1 auto; min-height:0;
+  overflow-y:auto;
+  padding:18px 20px 20px;
+}
+
+.dialog-head{
+  display:flex; align-items:center; gap:12px;
+  margin-bottom:16px;
+}
+.dialog-head h3{ flex:1 1 auto; margin:0; }
+.dialog h3{ font-size:1.7rem; font-weight:650; margin-bottom:7px; }
+.dialog-framed .dialog-head h3{ margin:0; }
+.dialog p{ font-size:1.45rem; color:var(--text-2); line-height:1.55; }
+.dialog-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+.btn-danger{ border-color:transparent; background:#e8402f; color:#fff; }
+.btn-danger:hover{ background:#ff5744; border-color:transparent; color:#fff; }
+
+/* -- welcome dialog: full screen modal shown at startup, blurring the
+   workspace behind it -- */
+.overlay-gate{
+  -webkit-backdrop-filter:blur(14px) saturate(.85);
+  backdrop-filter:blur(14px) saturate(.85);
+  animation:gate-in .32s var(--ease);
+}
+/* Where backdrop blur is supported, a lighter scrim is enough */
+@supports ((-webkit-backdrop-filter:blur(1px)) or (backdrop-filter:blur(1px))){
+  .overlay-gate{ background:rgba(5,6,8,.55); }
+}
+@keyframes gate-in{
+  from{ opacity:0; }
+  to{ opacity:1; }
+}
+.dialog-welcome{ max-width:580px; padding:52px 46px 44px; text-align:center; }
+.dialog-welcome h3{ margin-bottom:12px; font-size:2.7rem; }
+.dialog-welcome p{ margin:0 auto; max-width:33ch; font-size:1.75rem; }
+.welcome-actions{ display:flex; justify-content:center; gap:12px; margin-top:32px; }
+.welcome-actions .btn{ height:46px; padding:0 22px; font-size:1.5rem; }
+.dialog-welcome .welcome-note{ margin-top:22px; font-size:1.5rem; color:var(--text-3); }
+/* Narrow windows: stack the buttons */
+@media (max-width:560px){
+  .dialog-welcome{ padding:36px 24px 30px; }
+  .welcome-actions{ flex-direction:column; }
+  .welcome-actions .btn{ width:100%; }
+}
+
+/* Button styled as a text link (welcome "example", MIDI hint "Change…") */
+.link{
+  color:var(--blue); font:inherit; font-weight:600;
+  text-decoration:underline; text-underline-offset:3px;
+  transition:color .16s var(--ease);
+}
+.link:hover{ color:#8fb8ff; }
+
+/* -- key colour pickers, laid out like the device: page key | 4x3 keys -- */
+.color-layout{
+  display:grid;
+  grid-template-columns:auto 1px auto;
+  gap:16px;
+  align-items:center;
+  justify-content:start;
+}
+.color-rule{ align-self:stretch; background:var(--line); }
+.color-keys{
+  display:grid;
+  grid-template-columns:repeat(4,58px);
+  grid-template-rows:repeat(3,auto);
+  grid-auto-flow:column;
+  gap:8px;
+}
+.swatch{ display:flex; flex-direction:column; align-items:center; gap:5px; }
+.swatch > span{
+  font-family:var(--mono); font-size:1.05rem;
+  letter-spacing:.06em; color:var(--text-3);
+}
+.swatch input[type=color]{
+  width:100%; min-width:46px; height:34px;
+  padding:0;
+  border:1px solid var(--line-2);
+  border-radius:8px;
+  background:var(--surface-2);
+  cursor:pointer;
+  transition:border-color .18s var(--ease), transform .12s var(--ease);
+}
+.swatch input[type=color]:hover{ border-color:var(--text-3); transform:translateY(-1px); }
+.swatch input[type=color]::-webkit-color-swatch-wrapper{ padding:3px; }
+.swatch input[type=color]::-webkit-color-swatch{ border:0; border-radius:5px; }
+.swatch input[type=color]::-moz-color-swatch{ border:0; border-radius:5px; }
+
+/* -- toasts: notification stack floating over the bottom right corner -- */
+.toasts{
+  /* Aligned with the content edge of the right panel:
+     14px gutter + 1px border + 14px panel padding */
+  position:fixed; right:29px; bottom:29px; z-index:300;
+  display:flex; flex-direction:column; align-items:flex-end; gap:9px;
+  /* Clicks pass through to the controls underneath */
+  pointer-events:none;
+}
+.toast{
+  display:flex; align-items:center; gap:10px;
+  max-width:min(300px, calc(100vw - 58px));
+  padding:10px 13px 10px 11px;
+  border:1px solid var(--line-2);
+  border-radius:var(--r-lg);
+  background:var(--float);
+  -webkit-backdrop-filter:blur(16px) saturate(1.2);
+  backdrop-filter:blur(16px) saturate(1.2);
+  /* Inset top highlight on the raised edge */
+  box-shadow:var(--shadow-float), inset 0 1px 0 rgba(255,255,255,.05);
+  font-size:1.4rem; line-height:1.4; color:var(--text);
+  animation:toast-in .24s var(--ease);
+}
+/* Icon disc, tinted by the toast kind (ok / err / info) */
+.toast-icon{
+  flex:0 0 auto;
+  width:21px; height:21px;
+  display:grid; place-items:center;
+  border:1px solid transparent;
+  border-radius:99px;
+  color:var(--text);
+  background:var(--accent-dim);
+}
+.toast.ok .toast-icon{
+  color:var(--green); background:var(--green-soft); border-color:var(--green-line);
+}
+.toast.err .toast-icon{
+  color:var(--danger); background:var(--red-soft); border-color:var(--red-line);
+}
+@keyframes toast-in{
+  from{ opacity:0; transform:translateY(10px) scale(.98); }
+  to{ opacity:1; transform:none; }
+}
+/* Exit animation, set by dismissToast() */
+.toast.is-out{
+  opacity:0;
+  transform:translateY(6px) scale(.98);
+  transition:opacity .22s var(--ease), transform .22s var(--ease);
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width:860px){
+  /* Settings nav becomes a row of tabs across the top */
+  .settings-layout{ grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+  .settings-nav{
+    flex-direction:row; gap:4px;
+    border-right:0; border-bottom:1px solid var(--line);
+    overflow-x:auto;
+  }
+  .snav{ flex:0 0 auto; padding:9px 12px; }
+}
+
+@media (max-width:1560px){
+  .profile-field input{ width:150px; }
+}
+@media (max-width:1400px){
+  /* Stacked columns: the page scrolls as a whole instead of each panel */
+  html,body{ height:auto; }
+  body{ min-height:100%; overflow:auto; }
+  .workspace{ grid-template-columns:minmax(0,1fr); overflow:visible; }
+  /* Page cards flow in a grid instead of one full width card per row */
+  .pages-list{ display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); }
+  .panel-body,.stage-body{ overflow:visible; }
+  .stage-body{ justify-content:flex-start; }
+  .topbar{ flex-wrap:wrap; }
+  .profile-field{ flex:1 1 220px; }
+  .profile-field input{ width:100%; }
+}
+</style>
+</head>
+<body class="preload">
+
+<!-- ============================ TOP BAR ============================ -->
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+      </svg>
+    </div>
+    <h1 class="brand-name">Macro Pad <span class="chip">v2.0</span></h1>
+  </div>
+
+  <div class="topbar-spacer"></div>
+
+  <div class="topbar-tools">
+    <label class="profile-field">
+      <span>Profile</span>
+      <input type="text" id="profile-name-input" placeholder="My macro profile" spellcheck="false">
+    </label>
+
+    <button type="button" class="btn" id="settings-button" title="Device settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Settings
+    </button>
+
+    <label class="btn btn-t-blue" title="Load a profile from a JSON file">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M12 3v12M7 8l5-5 5 5"/>
+      </svg>
+      Import
+      <input type="file" id="import-json" class="file-input" accept=".json,application/json">
+    </label>
+
+    <button type="button" class="btn btn-blue" onclick="exportJSON()" title="Save the profile as a JSON file">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M12 15V3M7 10l5 5 5-5"/>
+      </svg>
+      Export
+    </button>
+  </div>
+</header>
+
+<!-- ============================ WORKSPACE ============================ -->
+<main class="workspace">
+
+  <!-- ---------------- PAGES ---------------- -->
+  <aside class="panel">
+    <div class="panel-head">
+      <span class="glyph">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </span>
+      <h2>Pages</h2>
+      <span class="head-count" id="pages-count">0</span>
+      <button type="button" class="btn btn-sm btn-t-green" onclick="addPage()" title="Add a page">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        Add
+      </button>
+    </div>
+    <div class="panel-body scroller">
+      <div class="pages-list" id="pages-list"></div>
+    </div>
+  </aside>
+
+  <!-- ---------------- DEVICE STAGE ---------------- -->
+  <section class="panel stage">
+    <div class="panel-head">
+      <span class="glyph">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 14h12"/>
+        </svg>
+      </span>
+      <h2>Preview</h2>
+      <span class="save-pill" id="save-status">
+        <span class="dot"></span>
+        <span id="save-status-text">All changes saved</span>
+      </span>
+    </div>
+
+    <div class="stage-body scroller">
+      <div class="device">
+        <div class="device-grid">
+
+          <div class="device-side">
+            <div class="oled" id="page-switch-display"></div>
+            <div class="side-key">
+              <button type="button" class="keycap plain" id="page-key" onclick="pressPageKey()" title="Cycle to the next visible page">
+                <span class="cap"><span>Page</span></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="device-main">
+            <div class="screens" id="screens"></div>
+            <div class="keys" id="keys"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <p class="stage-tip" id="stage-tip">Select a <b>key</b> to edit it.</p>
+    </div>
+  </section>
+
+  <!-- ---------------- KEY EDITOR ---------------- -->
+  <aside class="panel">
+    <div class="panel-head">
+      <span class="glyph">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>
+        </svg>
+      </span>
+      <h2>Key</h2>
+      <span class="key-id-badge" id="edit-key-id" hidden>Key 0</span>
+    </div>
+
+    <div class="empty" id="no-key-selected" hidden>
+      <div class="ring">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>
+        </svg>
+      </div>
+      <h3>No key selected</h3>
+      <p>Pick a key on the preview.</p>
+    </div>
+
+    <div class="panel-body scroller" id="key-editor">
+
+      <section class="section">
+        <div class="section-head">
+          <span class="glyph">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+            </svg>
+          </span>
+          <h3>Display</h3>
+        </div>
+        <div class="section-body">
+
+          <div class="field">
+            <label class="label" for="field-label">Label</label>
+            <div class="counted">
+              <input type="text" id="field-label" class="input mono" maxlength="14" placeholder="LABEL TEXT"
+                     spellcheck="false" autocapitalize="characters"
+                     oninput="updateCurrentKeyLabel(this)">
+              <span class="counter" id="char-limit-badge">0/14</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="row-toggle">
+              <div class="row-text">
+                <span class="row-title">Invert</span>
+              </div>
+              <label class="switch" title="Black text on a white row">
+                <input type="checkbox" id="field-inverted" onchange="updateCurrentKeyInverted(this.checked)">
+                <span class="track"></span>
+              </label>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <span class="glyph">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </span>
+          <h3>Action</h3>
+        </div>
+        <div class="section-body">
+          <div id="action-slot-1"></div>
+        </div>
+      </section>
+
+      <section class="section" id="second-action-section">
+        <div class="section-head">
+          <span class="glyph">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </span>
+          <h3>Action 2</h3>
+          <label class="switch" title="Fire a second command on the same press">
+            <input type="checkbox" id="field-second-enabled" aria-label="Enable the second action"
+                   onchange="updateSecondActionEnabled(this.checked)">
+            <span class="track"></span>
+          </label>
+        </div>
+
+        <!-- Hidden while the switch in the header is off -->
+        <div class="section-body" id="second-action-panel" hidden>
+          <div class="field">
+            <label class="label" for="field-second-delay">Delay</label>
+            <div class="stepper">
+              <span class="unit">sec</span>
+              <input type="text" id="field-second-delay" class="input" inputmode="decimal"
+                     oninput="updateSecondActionDelay()" onblur="finalizeSecondActionDelay()"
+                     onkeydown="handleSecondActionDelayKeys(event)">
+              <div class="stepper-arrows">
+                <button type="button" tabindex="-1" title="Increase" onclick="stepSecondActionDelay(0.5)">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15 7-7 7 7"/></svg>
+                </button>
+                <button type="button" tabindex="-1" title="Decrease" onclick="stepSecondActionDelay(-0.5)">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m19 9-7 7-7-7"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="action-slot-2"></div>
+        </div>
+      </section>
+
+      <div class="menu-spacer" aria-hidden="true"></div>
+    </div>
+  </aside>
+
+</main>
+
+<!-- ============================ DIALOG / TOASTS ============================ -->
+<div class="overlay" id="settings-overlay" hidden>
+  <!-- Category nav on the left, one tab pane shown at a time on the right -->
+  <div class="dialog dialog-lg dialog-framed dialog-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="dialog-head">
+      <h3 id="settings-title">Settings</h3>
+      <button type="button" class="btn-icon" id="settings-close" title="Close" aria-label="Close">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="settings-layout">
+      <nav class="settings-nav scroller" id="settings-nav" role="tablist" aria-label="Settings categories">
+        <button type="button" class="snav is-on" data-tab="keyboard" role="tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>
+          </svg>
+          Keyboard
+        </button>
+        <button type="button" class="snav" data-tab="pagekey" role="tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          </svg>
+          Page key
+        </button>
+        <button type="button" class="snav" data-tab="midi" role="tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+          </svg>
+          MIDI
+        </button>
+        <button type="button" class="snav" data-tab="standby" role="tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+          </svg>
+          Standby
+        </button>
+        <button type="button" class="snav" data-tab="colors" role="tab">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2.7 6.7 8a7.5 7.5 0 1 0 10.6 0L12 2.7z"/>
+          </svg>
+          Colours
+        </button>
+      </nav>
+
+      <div class="settings-pane scroller" id="settings-pane">
+
+        <section class="settings-tab" data-tab="keyboard">
+          <h4 class="tab-title">Keyboard</h4>
+          <div class="field field-narrow">
+            <label class="label" for="keyboard-layout">Layout</label>
+            <div class="select">
+              <button type="button" class="select-trigger"><span class="select-label"></span><span class="caret"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+              <div class="menu" hidden>
+                <button type="button" class="opt" data-value="US">US &mdash; English</button>
+                <button type="button" class="opt" data-value="IT">IT &mdash; Italian</button>
+              </div>
+              <select id="keyboard-layout">
+                <option value="US">US &mdash; English</option>
+                <option value="IT">IT &mdash; Italian</option>
+              </select>
+            </div>
+            <p class="hint">Used when typing text.</p>
+          </div>
+        </section>
+
+        <section class="settings-tab" data-tab="pagekey" hidden>
+          <h4 class="tab-title">Page key</h4>
+          <div class="choices">
+            <label class="choice">
+              <input type="radio" name="page-key-mode" value="NEXT_PAGE">
+              <span class="dot"></span>
+              <span class="choice-text">
+                <span class="choice-title">Next page</span>
+                <span class="choice-sub">Steps through the visible pages.</span>
+              </span>
+            </label>
+
+            <label class="choice">
+              <input type="radio" name="page-key-mode" value="PAGE_MENU">
+              <span class="dot"></span>
+              <span class="choice-text">
+                <span class="choice-title">Page menu</span>
+                <span class="choice-sub">One page per key, on the 12 keys.</span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-tab" data-tab="midi" hidden>
+          <h4 class="tab-title">MIDI</h4>
+          <div class="field field-narrow">
+            <label class="label" for="midi-channel">Channel</label>
+            <div class="select">
+              <button type="button" class="select-trigger"><span class="select-label"></span><span class="caret"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+              <!-- Options generated by populateMidiChannelSelect() -->
+              <div class="menu scrolling" hidden></div>
+              <select id="midi-channel"></select>
+            </div>
+            <p class="hint">MMC ignores the channel.</p>
+          </div>
+        </section>
+
+        <section class="settings-tab" data-tab="standby" hidden>
+          <h4 class="tab-title">Standby</h4>
+          <div class="row-toggle">
+            <div class="row-text">
+              <span class="row-title">Blank the displays when idle</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="standby-enabled">
+              <span class="track"></span>
+            </label>
+          </div>
+
+          <div class="field field-narrow" id="standby-time-field" style="margin-top:14px">
+            <label class="label" for="standby-time-input">Timeout (mm:ss)</label>
+            <input type="text" id="standby-time-input" class="input mono" inputmode="numeric" maxlength="5" placeholder="02:30">
+          </div>
+        </section>
+
+        <section class="settings-tab" data-tab="colors" hidden>
+          <h4 class="tab-title">Colours</h4>
+          <p class="hint" style="margin-bottom:14px">One colour per key, shared by every page.</p>
+          <div class="color-layout">
+            <div id="color-page"></div>
+            <div class="color-rule"></div>
+            <div class="color-keys" id="color-grid"></div>
+          </div>
+          <button type="button" class="btn btn-t-red" id="colors-reset" style="margin-top:16px">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>
+            </svg>
+            Reset
+          </button>
+        </section>
+
+        <div class="menu-spacer" aria-hidden="true"></div>
+      </div>
+    </div>
+
+    <div class="dialog-foot">
+      <div class="gap"></div>
+      <button type="button" class="btn btn-primary" id="settings-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="confirm-overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h3 id="confirm-title">Delete page</h3>
+    <p id="confirm-text"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+      <button type="button" class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Welcome dialog shown at startup: upload a profile, start from scratch
+     or load the example -->
+<div class="overlay overlay-gate" id="welcome-overlay" hidden>
+  <div class="dialog dialog-welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <h3 id="welcome-title">Welcome</h3>
+    <p>Build a profile and start optimizing your workflow.</p>
+    <div class="welcome-actions">
+      <button type="button" class="btn btn-blue" id="welcome-upload">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M12 3v12M7 8l5-5 5 5"/>
+        </svg>
+        Upload
+      </button>
+      <button type="button" class="btn btn-green" id="welcome-blank">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        Start from scratch
+      </button>
+    </div>
+    <p class="welcome-note">or load an <button type="button" class="link" id="welcome-example">example</button></p>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   1. STATE
+   The profile object is the contract with the firmware: field
+   names, order and value types must match what it parses.
+   ============================================================ */
+/* Example profile, loaded from the welcome dialog. It is only used as a
+   template: every use is a deep copy (see cloneProfile).
+   Six pages of Mac shortcuts covering every action type, second actions and
+   inverted labels. FUSION and MIDI are hidden pages (subpages), reachable only
+   through GO_TO_PAGE actions. */
+const EXAMPLE_PROFILE = {
+  "profile_name": "Mac Workflow",
+  "keyboard_layout": "US",
+  "midi_channel": 1,
+  "page_key_mode": "NEXT_PAGE",
+  "standby_enabled": true,
+  "standby_time": 300,
+  "pages": [
+    {
+      "page_id": 1,
+      "name": "HOME",
+      "visible": true,
+      "keys": [
+        { "id": 1,  "label": "COPY",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_C"],
+          "second_action_enabled": false, "second_action_delay": 0, "second_action_type": "SHORTCUT", "second_action_commands": [] },
+        { "id": 2,  "label": "PASTE",       "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_V"] },
+        { "id": 3,  "label": "UNDO",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_Z"] },
+        { "id": 4,  "label": "PLAY/PAUSE",  "inverted": true,  "type": "MULTIMEDIA", "commands": ["MEDIA_PLAY_PAUSE"] },
+        { "id": 5,  "label": "NEXT TRACK",  "inverted": false, "type": "MULTIMEDIA", "commands": ["MEDIA_NEXT"] },
+        { "id": 6,  "label": "MUTE",        "inverted": false, "type": "MULTIMEDIA", "commands": ["MEDIA_MUTE"] },
+        { "id": 7,  "label": "VOLUME +",    "inverted": false, "type": "MULTIMEDIA", "commands": ["MEDIA_VOLUME_UP"] },
+        { "id": 8,  "label": "VOLUME -",    "inverted": false, "type": "MULTIMEDIA", "commands": ["MEDIA_VOLUME_DOWN"] },
+        { "id": 9,  "label": "SLEEP",       "inverted": false, "type": "DEVICE",     "commands": ["STANDBY"] },
+        { "id": 10, "label": "EMAIL",       "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "2"] },
+        { "id": 11, "label": "RESOLVE",     "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "3"] },
+        { "id": 12, "label": "MIDI",        "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "6"] }
+      ]
+    },
+    {
+      "page_id": 2,
+      "name": "EMAIL",
+      "visible": true,
+      "keys": [
+        { "id": 1,  "label": "OPEN OUTLOOK","inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_SPACE"],
+          "second_action_enabled": true, "second_action_delay": 0.8, "second_action_type": "TEXT", "second_action_commands": ["outlook\n"] },
+        { "id": 2,  "label": "NEW MAIL",    "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_N"] },
+        { "id": 3,  "label": "SEND",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_ENTER"] },
+        { "id": 4,  "label": "REPLY",       "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_R"] },
+        { "id": 5,  "label": "REPLY ALL",   "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_LEFT_SHIFT", "KEY_R"] },
+        { "id": 6,  "label": "FORWARD",     "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_J"] },
+        { "id": 7,  "label": "COPY",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_C"] },
+        { "id": 8,  "label": "CUT",         "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_X"] },
+        { "id": 9,  "label": "PASTE",       "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_V"] },
+        { "id": 10, "label": "SIGNATURE",   "inverted": false, "type": "TEXT",       "commands": ["Best regards,\nGiovanni Aggiustatutto\nMaker Giovanni"] },
+        { "id": 11, "label": "MY EMAIL",    "inverted": true,  "type": "TEXT",       "commands": ["name.surname@example.com"] },
+        { "id": 12, "label": "HOME",        "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "1"] }
+      ]
+    },
+    {
+      "page_id": 3,
+      "name": "RESOLVE",
+      "visible": true,
+      "keys": [
+        { "id": 1,  "label": "EDIT PAGE",   "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_3"] },
+        { "id": 2,  "label": "COLOR PAGE",  "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_5"] },
+        { "id": 3,  "label": "FUSION PAGE", "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_4"],
+          "second_action_enabled": true, "second_action_delay": 0.5, "second_action_type": "DEVICE", "second_action_commands": ["GO_TO_PAGE", "5"] },
+        { "id": 4,  "label": "COPY",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_C"] },
+        { "id": 5,  "label": "CUT",         "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_X"] },
+        { "id": 6,  "label": "PASTE",       "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_V"] },
+        { "id": 7,  "label": "MARK IN",     "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_I"] },
+        { "id": 8,  "label": "MARK OUT",    "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_O"] },
+        { "id": 9,  "label": "BLADE",       "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_B"] },
+        { "id": 10, "label": "UNDO",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_Z"] },
+        { "id": 11, "label": "REDO",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_LEFT_SHIFT", "KEY_Z"] },
+        { "id": 12, "label": "HOME",        "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "1"] }
+      ]
+    },
+    {
+      "page_id": 4,
+      "name": "WORD",
+      "visible": true,
+      "keys": [
+        { "id": 1,  "label": "BOLD",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_B"] },
+        { "id": 2,  "label": "ITALIC",      "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_I"] },
+        { "id": 3,  "label": "SAVE",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_S"] },
+        { "id": 4,  "label": "UNDO",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_Z"] },
+        { "id": 5,  "label": "REDO",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_LEFT_GUI", "KEY_Z"] },
+        { "id": 6,  "label": "NEW DOCUMENT","inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_N"] },
+        { "id": 7,  "label": "COPY",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_C"] },
+        { "id": 8,  "label": "CUT",         "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_X"] },
+        { "id": 9,  "label": "PASTE",       "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_V"] },
+        { "id": 10, "label": "COMMENT",     "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_LEFT_ALT", "KEY_A"] },
+        { "id": 11, "label": "SELECT ALL",  "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_A"] },
+        { "id": 12, "label": "HOME",        "inverted": false, "type": "DEVICE",     "commands": ["GO_TO_PAGE", "1"] }
+      ]
+    },
+    {
+      "page_id": 5,
+      "name": "FUSION",
+      "visible": false,
+      "keys": [
+        { "id": 1,  "label": "ADD TOOL",    "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_SPACE"] },
+        { "id": 2,  "label": "RENAME",      "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_F2"] },
+        { "id": 3,  "label": "DISABLE NODE","inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_P"] },
+        { "id": 4,  "label": "VIEWER 1",    "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_1"] },
+        { "id": 5,  "label": "VIEWER 2",    "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_2"] },
+        { "id": 6,  "label": "FIT VIEW",    "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_F"] },
+        { "id": 7,  "label": "COPY",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_C"] },
+        { "id": 8,  "label": "CUT",         "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_X"] },
+        { "id": 9,  "label": "PASTE",       "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_V"] },
+        { "id": 10, "label": "UNDO",        "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_Z"] },
+        { "id": 11, "label": "REDO",        "inverted": false, "type": "SHORTCUT",   "commands": ["KEY_LEFT_GUI", "KEY_LEFT_SHIFT", "KEY_Z"] },
+        { "id": 12, "label": "EDIT PAGE",   "inverted": true,  "type": "SHORTCUT",   "commands": ["KEY_LEFT_SHIFT", "KEY_3"],
+          "second_action_enabled": true, "second_action_delay": 0.5, "second_action_type": "DEVICE", "second_action_commands": ["GO_TO_PAGE", "3"] }
+      ]
+    },
+    {
+      "page_id": 6,
+      "name": "MIDI",
+      "visible": false,
+      "keys": [
+        { "id": 1,  "label": "NOTE C3",     "inverted": false, "type": "MIDI",       "commands": ["NOTE_ON", "60", "127"] },
+        { "id": 2,  "label": "NOTE E3",     "inverted": false, "type": "MIDI",       "commands": ["NOTE_ON", "64", "127"] },
+        { "id": 3,  "label": "NOTE G3",     "inverted": false, "type": "MIDI",       "commands": ["NOTE_ON", "67", "127"] },
+        { "id": 4,  "label": "NOTE C4",     "inverted": false, "type": "MIDI",       "commands": ["NOTE_ON", "72", "127"] },
+        { "id": 5,  "label": "NOTE OFF C3", "inverted": false, "type": "MIDI",       "commands": ["NOTE_OFF", "60", "0"] },
+        { "id": 6,  "label": "ALL NOTES OFF","inverted": false, "type": "MIDI",       "commands": ["CONTROL_CHANGE", "123", "0"] },
+        { "id": 7,  "label": "CC1 MOD",     "inverted": false, "type": "MIDI",       "commands": ["CONTROL_CHANGE", "1", "127"] },
+        { "id": 8,  "label": "CC7 VOLUME",  "inverted": false, "type": "MIDI",       "commands": ["CONTROL_CHANGE", "7", "100"] },
+        { "id": 9,  "label": "CC74 FILTER", "inverted": false, "type": "MIDI",       "commands": ["CONTROL_CHANGE", "74", "64"] },
+        { "id": 10, "label": "MMC PLAY",    "inverted": false, "type": "MIDI",       "commands": ["MMC_PLAY"] },
+        { "id": 11, "label": "MMC STOP",    "inverted": false, "type": "MIDI",       "commands": ["MMC_STOP"] },
+        { "id": 12, "label": "MMC RECORD",  "inverted": true,  "type": "MIDI",       "commands": ["MMC_RECORD"] }
+      ]
+    }
+  ]
+  // No key_colors: sanitizeKeyColors() fills in the default palette
+};
+
+/* Replaced by a blank profile at boot; initialised here so that state is
+   always a valid profile */
+let state = cloneProfile(EXAMPLE_PROFILE);
+
+let activePageIndex = 0;
+let activeKeyIndex = null;     // null when no key is selected
+let hasUnsavedChanges = false;
+let pageMenuOpen = false;      // page menu shown in the preview (not saved)
+let pageMenuScreen = 0;        // page menu screen being shown (12 pages each)
+
+const KEY_COUNT = 12;
+
+/* Pages and keys are numbered from 1 in the profile (page_id, id) and in the
+   UI, but stored in 0-based arrays: convert only through these two helpers */
+const idFromIndex = (index) => index + 1;
+const indexFromId = (id) => Number(id) - 1;
+
+const ACTION_TYPES = ["SHORTCUT", "MULTIMEDIA", "MIDI", "TEXT", "DEVICE"];
+/* DEVICE actions control the macropad itself: commands[0] is the action,
+   GO_TO_PAGE stores the target page_id in commands[1] */
+const DEVICE_ACTIONS = ["STANDBY", "PAGE_MENU", "GO_TO_PAGE"];
+/* Page key behaviour: step to the next visible page, or open a menu that
+   puts one page on each of the 12 keys */
+const PAGE_KEY_MODES = ["NEXT_PAGE", "PAGE_MENU"];
+const KEYBOARD_LAYOUTS = ["US", "IT"];
+/* Global MIDI channel (1-16) used by all MIDI actions. MMC commands are
+   SysEx messages and ignore it */
+const MIDI_CHANNEL_MIN = 1;
+const MIDI_CHANNEL_MAX = 16;
+const DEFAULT_MIDI_CHANNEL = 1;
+const MAX_SECOND_ACTION_DELAY = 600;   // seconds
+
+/* Option lists are [value, label, icon]. icon() builds an inline SVG from
+   path data drawn on a 24x24 grid */
+const icon = (path, size = 15) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+  `stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+
+const ICO_KEYBOARD = icon('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>');
+const ICO_SPEAKER  = icon('<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>');
+const ICO_NOTE     = icon('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>');
+const ICO_TEXT     = icon('<path d="M4 7V4h16v3M9 20h6M12 4v16"/>');
+const ICO_CHIP     = icon('<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>');
+const ICO_PLAY     = icon('<path d="m6 4 12 8-12 8V4z"/>');
+const ICO_STOP     = icon('<rect x="6" y="6" width="12" height="12" rx="1.5"/>');
+const ICO_RECORD   = icon('<circle cx="12" cy="12" r="7"/>');
+const ICO_GRID     = icon('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>');
+const ICO_MOON     = icon('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>');
+const ICO_JUMP     = icon('<path d="M5 12h14M13 6l6 6-6 6"/>');
+
+const TYPE_OPTIONS = [
+  ["SHORTCUT",   "Shortcut", ICO_KEYBOARD],
+  ["MULTIMEDIA", "Media",    ICO_SPEAKER],
+  ["MIDI",       "MIDI",     ICO_NOTE],
+  ["TEXT",       "Text",     ICO_TEXT],
+  ["DEVICE",     "Device",   ICO_CHIP]
+];
+
+const DEVICE_OPTIONS = [
+  ["STANDBY",    "Standby",   ICO_MOON],
+  ["PAGE_MENU",  "Page menu", ICO_GRID],
+  ["GO_TO_PAGE", "Go to page",ICO_JUMP]
+];
+
+/* Hint shown under the device action selector (empty = no hint) */
+const DEVICE_HINTS = {
+  STANDBY:    "",
+  PAGE_MENU:  "",
+  GO_TO_PAGE: "Hidden pages open as subpages."
+};
+
+const MEDIA_OPTIONS = [
+  ["MEDIA_PLAY_PAUSE",  "Play / Pause",  ICO_PLAY],
+  ["MEDIA_VOLUME_UP",   "Volume up",     icon('<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/>')],
+  ["MEDIA_VOLUME_DOWN", "Volume down",   ICO_SPEAKER],
+  ["MEDIA_MUTE",        "Mute",          icon('<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m16 9 5 6M21 9l-5 6"/>')],
+  ["MEDIA_NEXT",        "Next track",    icon('<path d="m5 4 10 8-10 8V4zM19 5v14"/>')],
+  ["MEDIA_PREVIOUS",    "Previous track",icon('<path d="M19 20 9 12l10-8v16zM5 19V5"/>')],
+  ["MEDIA_STOP",        "Stop",          ICO_STOP]
+];
+
+const MIDI_OPTIONS = [
+  ["NOTE_ON",        "Note on",        ICO_NOTE],
+  ["NOTE_OFF",       "Note off",       icon('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M3 3 21 21"/>')],
+  ["CONTROL_CHANGE", "Control change", icon('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>')],
+  ["MMC_PLAY",       "MMC play",       ICO_PLAY],
+  ["MMC_STOP",       "MMC stop",       ICO_STOP],
+  ["MMC_RECORD",     "MMC record",     ICO_RECORD]
+];
+
+/* Key codes available to SHORTCUT actions, as named in the profile */
+const KEYCODES_POOL = [
+  "KEY_LEFT_CTRL", "KEY_LEFT_SHIFT", "KEY_LEFT_ALT", "KEY_LEFT_GUI",
+  "KEY_RIGHT_CTRL", "KEY_RIGHT_SHIFT", "KEY_RIGHT_ALT", "KEY_RIGHT_GUI",
+  "KEY_A", "KEY_B", "KEY_C", "KEY_D", "KEY_E", "KEY_F", "KEY_G", "KEY_H",
+  "KEY_I", "KEY_J", "KEY_K", "KEY_L", "KEY_M", "KEY_N", "KEY_O", "KEY_P",
+  "KEY_Q", "KEY_R", "KEY_S", "KEY_T", "KEY_U", "KEY_V", "KEY_W", "KEY_X",
+  "KEY_Y", "KEY_Z", "KEY_1", "KEY_2", "KEY_3", "KEY_4", "KEY_5", "KEY_6",
+  "KEY_7", "KEY_8", "KEY_9", "KEY_0", "KEY_ENTER", "KEY_ESC", "KEY_BACKSPACE",
+  "KEY_TAB", "KEY_SPACE", "KEY_MINUS", "KEY_EQUAL", "KEY_LEFT_BRACE",
+  "KEY_RIGHT_BRACE", "KEY_BACKSLASH", "KEY_SEMICOLON", "KEY_APOSTROPHE",
+  "KEY_GRAVE", "KEY_COMMA", "KEY_PERIOD", "KEY_SLASH", "KEY_CAPS_LOCK",
+  "KEY_F1", "KEY_F2", "KEY_F3", "KEY_F4", "KEY_F5", "KEY_F6", "KEY_F7",
+  "KEY_F8", "KEY_F9", "KEY_F10", "KEY_F11", "KEY_F12", "KEY_PRINTSCREEN",
+  "KEY_SCROLL_LOCK", "KEY_PAUSE", "KEY_INSERT", "KEY_HOME", "KEY_PAGE_UP",
+  "KEY_DELETE", "KEY_END", "KEY_PAGE_DOWN", "KEY_RIGHT", "KEY_LEFT",
+  "KEY_DOWN", "KEY_UP"
+];
+
+/* ============================================================
+   2. SMALL HELPERS
+   ============================================================ */
+const $  = (id) => document.getElementById(id);
+
+function escapeHtml(value) {
+  return `${value ?? ''}`.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch]);
+}
+
+function getDisplayLabel(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function show(el, visible) {
+  if (el) el.hidden = !visible;
+}
+
+/* -- toasts: non-blocking notifications -- */
+/* Icon for each toast kind */
+const TOAST_GLYPH = {
+  ok:   '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4.5 4.5L19 7"/></svg>',
+  err:  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.5v7.5M12 18.5h.01"/></svg>',
+  info: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5V10M12 6h.01"/></svg>',
+};
+
+/* When more toasts are on screen, the oldest ones are dismissed */
+const MAX_TOASTS = 3;
+
+/* Fades a toast out (.is-out), then removes it */
+function dismissToast(el) {
+  if (!el || el.classList.contains('is-out')) return;
+  el.classList.add('is-out');
+  setTimeout(() => el.remove(), 240);
+}
+
+function toast(message, kind = 'info', timeout = 3600) {
+  const stack = $('toasts');
+  if (!stack) return;
+
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.innerHTML =
+    `<span class="toast-icon">${TOAST_GLYPH[kind] || TOAST_GLYPH.info}</span>` +
+    `<span>${escapeHtml(message)}</span>`;
+  stack.appendChild(el);
+
+  const live = stack.querySelectorAll('.toast:not(.is-out)');
+  for (let i = 0; i < live.length - MAX_TOASTS; i++) dismissToast(live[i]);
+
+  setTimeout(() => dismissToast(el), timeout);
+}
+
+/* -- confirmation dialog, in place of window.confirm() -- */
+let pendingConfirm = null;
+
+function askConfirm(title, text, onConfirm) {
+  $('confirm-title').textContent = title;
+  $('confirm-text').textContent = text;
+  pendingConfirm = onConfirm;
+  show($('confirm-overlay'), true);
+  $('confirm-ok').focus();
+}
+
+function closeConfirm(accepted) {
+  show($('confirm-overlay'), false);
+  const callback = pendingConfirm;
+  pendingConfirm = null;
+  if (accepted && callback) callback();
+}
+
+/* ============================================================
+   2b. KEY COLOURS
+   One colour per physical key plus the page key, shared by all
+   pages, so the preview matches the real keycaps. Saved in this
+   browser, not in the exported profile.
+   ============================================================ */
+// Default palette, used at first start and by Reset: red, green and amber
+// repeating in key order
+const DEFAULT_KEY_COLORS = [
+  '#FF1F1F', '#18CC00', '#FFB020', '#FF1F1F', '#18CC00', '#FFB020',
+  '#FF1F1F', '#18CC00', '#FFB020', '#FF1F1F', '#18CC00', '#FFB020'
+];
+const DEFAULT_KEY_COLOR = DEFAULT_KEY_COLORS[0];
+const DEFAULT_PAGE_KEY_COLOR = '#C4C4C4';
+
+// Neutral keycap colours (RGB), tinted towards each key's colour by paintKeycap()
+const CAP_FILL = [31, 36, 44];    /* --surface-3 */
+const CAP_EDGE = [72, 80, 93];    /* --line-2 */
+const CAP_WELL = [9, 11, 14];     /* inner cap background */
+const WHITE    = [255, 255, 255];
+
+// Accepts "#RGB" or "#RRGGBB" (with or without #), returns "#RRGGBB" uppercase
+function normalizeHexColor(value, fallback = DEFAULT_KEY_COLOR) {
+  const raw = `${value ?? ''}`.trim();
+
+  const short = /^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(raw);
+  if (short) return `#${(short[1] + short[1] + short[2] + short[2] + short[3] + short[3]).toUpperCase()}`;
+
+  const full = /^#?([0-9a-f]{6})$/i.exec(raw);
+  if (full) return `#${full[1].toUpperCase()}`;
+
+  return fallback;
+}
+
+function hexToRgb(hex) {
+  const clean = normalizeHexColor(hex);
+  return [
+    parseInt(clean.slice(1, 3), 16),
+    parseInt(clean.slice(3, 5), 16),
+    parseInt(clean.slice(5, 7), 16)
+  ];
+}
+
+// Linear blend: t = 0 returns "from", t = 1 returns "to"
+function mixRgb(from, to, t) {
+  return from.map((channel, i) => Math.round(channel + (to[i] - channel) * t));
+}
+
+function rgbCss(rgb, alpha) {
+  return alpha === undefined ? `rgb(${rgb.join(',')})` : `rgba(${rgb.join(',')},${alpha})`;
+}
+
+function defaultKeyColors() {
+  return {
+    page_key: DEFAULT_PAGE_KEY_COLOR,
+    keys: [...DEFAULT_KEY_COLORS]
+  };
+}
+
+function sanitizeKeyColors() {
+  const source = (state.key_colors && typeof state.key_colors === 'object') ? state.key_colors : {};
+  const rawKeys = Array.isArray(source.keys) ? source.keys : [];
+
+  state.key_colors = {
+    page_key: normalizeHexColor(source.page_key, DEFAULT_PAGE_KEY_COLOR),
+    keys: Array.from({ length: KEY_COUNT }, (_, i) => normalizeHexColor(rawKeys[i], DEFAULT_KEY_COLORS[i]))
+  };
+}
+
+/* Key colours are kept in localStorage. Every access is wrapped in try/catch,
+   since storage can be unavailable (e.g. on file:// pages) */
+const COLOR_STORAGE_KEY = 'macropad.key_colors.v1';
+
+function loadStoredKeyColors() {
+  try {
+    const raw = window.localStorage.getItem(COLOR_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const rawKeys = Array.isArray(parsed.keys) ? parsed.keys : [];
+    return {
+      page_key: normalizeHexColor(parsed.page_key, DEFAULT_PAGE_KEY_COLOR),
+      keys: Array.from({ length: KEY_COUNT }, (_, i) => normalizeHexColor(rawKeys[i], DEFAULT_KEY_COLORS[i]))
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
+function storeKeyColors() {
+  try {
+    window.localStorage.setItem(COLOR_STORAGE_KEY, JSON.stringify(state.key_colors));
+  } catch (err) {
+    /* Storage unavailable: colours last for this session only */
+  }
+}
+
+function restoreStoredKeyColors() {
+  const stored = loadStoredKeyColors();
+  if (stored) state.key_colors = stored;
+}
+
+/* Paints a keycap from its colour: a tint of the neutral cap with a coloured
+   edge and label when resting, filled with the colour plus a 3px ring and a
+   soft glow when selected */
+function paintKeycap(keyBtn, hex, isSelected) {
+  const rgb = hexToRgb(hex);
+  const cap = keyBtn.querySelector('.cap');
+  const text = cap.firstElementChild;
+
+  if (isSelected) {
+    keyBtn.style.background = rgbCss(mixRgb(CAP_FILL, rgb, .78));
+    keyBtn.style.borderColor = rgbCss(mixRgb(rgb, WHITE, .35));
+    keyBtn.style.boxShadow = `0 0 0 3px ${rgbCss(rgb, .55)}, 0 0 18px ${rgbCss(rgb, .35)}`;
+    cap.style.background = rgbCss(mixRgb(CAP_WELL, rgb, .22), .45);
+    cap.style.borderColor = rgbCss(mixRgb(rgb, WHITE, .35), .7);
+    text.style.color = rgbCss(WHITE);
+  } else {
+    keyBtn.style.background = rgbCss(mixRgb(CAP_FILL, rgb, .24));
+    keyBtn.style.borderColor = rgbCss(mixRgb(CAP_EDGE, rgb, .75));
+    keyBtn.style.boxShadow = `0 1px 2px rgba(0,0,0,.3), 0 0 10px -3px ${rgbCss(rgb, .35)}`;
+    cap.style.background = rgbCss(mixRgb(CAP_WELL, rgb, .14), .5);
+    cap.style.borderColor = rgbCss(rgb, .12);
+    text.style.color = rgbCss(mixRgb(rgb, WHITE, .3));
+  }
+}
+
+/* ============================================================
+   3. SAVE STATUS
+   ============================================================ */
+function markDirty() {
+  hasUnsavedChanges = true;
+  renderSaveStatus();
+}
+
+function markSaved() {
+  hasUnsavedChanges = false;
+  renderSaveStatus();
+}
+
+function renderSaveStatus() {
+  const badge = $('save-status');
+  const label = $('save-status-text');
+  if (!badge || !label) return;
+
+  badge.classList.toggle('is-dirty', hasUnsavedChanges);
+  label.textContent = hasUnsavedChanges ? 'Unsaved' : 'Saved';
+  badge.title = hasUnsavedChanges
+    ? 'Some changes have not been exported yet'
+    : 'All changes have been exported to a JSON profile';
+}
+
+// Asks for confirmation before leaving the page with unexported changes
+function handleBeforeUnload(event) {
+  if (!hasUnsavedChanges) return;
+  event.preventDefault();
+  event.returnValue = 'You have unsaved changes. Leave without saving?';
+  return event.returnValue;
+}
+
+/* ============================================================
+   4. STANDBY TIME (mm:ss <-> seconds)
+   ============================================================ */
+// Live formatting while typing: digits only, colon inserted after the minutes
+function formatStandbyTimeInput(value) {
+  const raw = (value || '').replace(/[^\d:]/g, '');
+  if (!raw) return '';
+
+  const parts = raw.split(':');
+  const minutesPart = (parts[0] || '').replace(/\D/g, '');
+  const secondsPart = (parts[1] || '').replace(/\D/g, '');
+  const digits = `${minutesPart}${secondsPart}`;
+
+  if (!digits) return '';
+  if (digits.length <= 2) return digits;
+  if (digits.length === 3) return `${digits.slice(0, 2)}:${digits.slice(2, 3)}`;
+  return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
+}
+
+// Seconds -> "mm:ss"
+function formatStandbyTimeValue(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds) || 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+// "mm:ss" -> seconds. Without a colon, up to 2 digits are seconds and longer
+// input is read as mmss. Seconds are capped at 59, empty input gives 150
+function parseStandbyTimeValue(value) {
+  const raw = `${value || ''}`.replace(/[^\d:]/g, '');
+  if (!raw) return 150;
+
+  let minutes = 0;
+  let seconds = 0;
+
+  if (raw.includes(':')) {
+    const [minutesPart, secondsPart] = raw.split(':');
+    minutes = parseInt((minutesPart || '').replace(/\D/g, ''), 10) || 0;
+    seconds = parseInt((secondsPart || '').replace(/\D/g, ''), 10) || 0;
+  } else {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length <= 2) {
+      seconds = parseInt(digits, 10) || 0;
+    } else {
+      minutes = parseInt(digits.slice(0, 2), 10) || 0;
+      seconds = parseInt(digits.slice(2, 4), 10) || 0;
+    }
+  }
+
+  seconds = Math.min(seconds, 59);
+  return minutes * 60 + seconds;
+}
+
+/* ============================================================
+   5. NORMALIZATION
+   Shared by import, sanitizeState and export.
+   ============================================================ */
+/* The firmware and the OLED font support printable ASCII only: accents are
+   stripped (è -> e), any other character is removed */
+function toAsciiText(value) {
+  return `${value ?? ''}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/g, '');
+}
+
+/* Key labels and page names are shown uppercase on 14 character wide rows,
+   so they are stored that way */
+const NAME_MAX_LENGTH = 14;
+
+function normalizeDisplayName(value) {
+  return toAsciiText(value).toUpperCase().slice(0, NAME_MAX_LENGTH);
+}
+
+/* Applies transform() to an input while typing, keeping the caret in place
+   when characters are removed */
+function applyTextInput(input, transform) {
+  const raw = input.value;
+  const clean = transform(raw);
+
+  if (clean !== raw) {
+    const caret = input.selectionStart ?? raw.length;
+    const head = transform(raw.slice(0, caret));
+    input.value = clean;
+    const pos = Math.min(head.length, clean.length);
+    input.setSelectionRange(pos, pos);
+  }
+  return clean;
+}
+
+// Commands given to an action when its type changes
+function defaultCommandsForType(type) {
+  if (type === 'MULTIMEDIA') return ["MEDIA_PLAY_PAUSE"];
+  if (type === 'MIDI') return ["NOTE_ON", "60", "127"];
+  if (type === 'TEXT') return [""];
+  if (type === 'DEVICE') return ["STANDBY"];
+  return [];
+}
+
+// Clamps a GO_TO_PAGE target to an existing page number (1 to page count)
+function clampPageTarget(rawValue) {
+  const pageCount = Array.isArray(state.pages) ? state.pages.length : 0;
+  const pageNumber = Math.trunc(Number(`${rawValue ?? ''}`.trim()));
+
+  if (!Number.isFinite(pageNumber) || pageNumber < 1) return 1;
+  return pageCount > 0 ? Math.min(pageNumber, pageCount) : pageNumber;
+}
+
+// DEVICE commands: [action], or ["GO_TO_PAGE", page number]
+function normalizeDeviceCommands(rawCommands) {
+  const list = Array.isArray(rawCommands) ? rawCommands.map(cmd => `${cmd}`) : [];
+  const action = DEVICE_ACTIONS.includes(list[0]) ? list[0] : DEVICE_ACTIONS[0];
+
+  if (action !== 'GO_TO_PAGE') return [action];
+  return [action, `${clampPageTarget(list[1])}`];
+}
+
+function normalizeCommands(rawCommands, type) {
+  if (type === 'DEVICE') return normalizeDeviceCommands(rawCommands);
+
+  // TEXT: the whole string, line breaks included, is stored in commands[0]
+  if (type === 'TEXT') {
+    if (typeof rawCommands === 'string') return [rawCommands];
+    if (Array.isArray(rawCommands)) return [rawCommands.map(cmd => `${cmd}`).join('\n')];
+    return defaultCommandsForType(type);
+  }
+
+  if (!Array.isArray(rawCommands)) return defaultCommandsForType(type);
+  return rawCommands.map(cmd => `${cmd}`);
+}
+
+// Second action delay in seconds: comma or dot decimal, clamped to
+// 0..MAX_SECOND_ACTION_DELAY, rounded to one decimal
+function normalizeDelayValue(rawValue, fallback = 0) {
+  const numericValue = Number(`${rawValue ?? ''}`.replace(',', '.').trim());
+  if (!Number.isFinite(numericValue)) return fallback;
+
+  const clamped = Math.max(0, Math.min(MAX_SECOND_ACTION_DELAY, numericValue));
+  return Math.round(clamped * 10) / 10;
+}
+
+function formatDelayValue(value) {
+  // Always one decimal, so the field width stays stable while stepping
+  return normalizeDelayValue(value, 0).toFixed(1);
+}
+
+// Rebuilds a key with every field present, in schema order.
+// id is the 1-based slot number
+function normalizeKey(rawKey, id) {
+  const source = rawKey || {};
+  const type = ACTION_TYPES.includes(source.type) ? source.type : "SHORTCUT";
+  const secondType = ACTION_TYPES.includes(source.second_action_type) ? source.second_action_type : "SHORTCUT";
+
+  return {
+    id: id,
+    label: typeof source.label === 'string' ? normalizeDisplayName(source.label) : `KEY ${id}`,
+    inverted: Boolean(source.inverted),
+    type: type,
+    commands: normalizeCommands(source.commands, type),
+    second_action_enabled: Boolean(source.second_action_enabled),
+    second_action_delay: normalizeDelayValue(source.second_action_delay, 0),
+    second_action_type: secondType,
+    second_action_commands: normalizeCommands(source.second_action_commands, secondType)
+  };
+}
+
+// Missing or unknown modes fall back to NEXT_PAGE
+function normalizePageKeyMode(value) {
+  return PAGE_KEY_MODES.includes(value) ? value : PAGE_KEY_MODES[0];
+}
+
+// Missing or unknown layouts fall back to US
+function normalizeKeyboardLayout(value) {
+  return KEYBOARD_LAYOUTS.includes(value) ? value : KEYBOARD_LAYOUTS[0];
+}
+
+// Missing or non-numeric channels fall back to 1, others are clamped to 1-16
+function normalizeMidiChannel(value) {
+  const channel = Math.round(Number(value));
+  if (!Number.isFinite(channel)) return DEFAULT_MIDI_CHANNEL;
+  return Math.min(MIDI_CHANNEL_MAX, Math.max(MIDI_CHANNEL_MIN, channel));
+}
+
+/* Normalizes the whole profile in place: device settings, key colours, page
+   ids and names, and exactly 12 keys per page, sorted by id */
+function sanitizeState() {
+  state.profile_name = toAsciiText(state.profile_name);
+  state.keyboard_layout = normalizeKeyboardLayout(state.keyboard_layout);
+  state.midi_channel = normalizeMidiChannel(state.midi_channel);
+  state.page_key_mode = normalizePageKeyMode(state.page_key_mode);
+  if (state.page_key_mode !== 'PAGE_MENU') pageMenuOpen = false;
+
+  sanitizeKeyColors();
+
+  state.pages.forEach((page, pageIdx) => {
+    page.page_id = idFromIndex(pageIdx);
+    page.name = normalizeDisplayName(page.name) || `PAGE ${idFromIndex(pageIdx)}`;
+
+    // Each key goes to the slot named by its id; a key with a missing or
+    // invalid id keeps its position in the array (same rule as the firmware).
+    // Empty slots get a default key
+    const existingKeys = Array.isArray(page.keys) ? page.keys : [];
+    const slots = new Array(KEY_COUNT).fill(null);
+    existingKeys.forEach((key, position) => {
+      const id = Number(key?.id);
+      const index = (Number.isInteger(id) && id >= 1 && id <= KEY_COUNT)
+        ? indexFromId(id)
+        : position;
+      if (index < KEY_COUNT) slots[index] = key;
+    });
+
+    page.keys = slots.map((key, index) => normalizeKey(key, idFromIndex(index)));
+  });
+}
+
+function createDefaultKey(id) {
+  return normalizeKey({ label: `KEY ${id}` }, id);
+}
+
+/* -- Whole profiles, loaded through applyProfile() -- */
+
+/* Deep copy, so edits never reach the source object (e.g. EXAMPLE_PROFILE) */
+function cloneProfile(profile) {
+  return JSON.parse(JSON.stringify(profile));
+}
+
+function exampleProfile() {
+  return cloneProfile(EXAMPLE_PROFILE);
+}
+
+/* "Start from scratch" profile: default settings, no name and one page of
+   default keys. Fields in schema order */
+function blankProfile() {
+  return {
+    "profile_name": "",
+    "keyboard_layout": KEYBOARD_LAYOUTS[0],
+    "midi_channel": DEFAULT_MIDI_CHANNEL,
+    "page_key_mode": PAGE_KEY_MODES[0],
+    "standby_enabled": false,
+    "standby_time": 150,
+    "pages": [
+      {
+        "page_id": 1,
+        "name": "PAGE 1",
+        "visible": true,
+        "keys": Array.from({ length: KEY_COUNT }, (_, i) => createDefaultKey(idFromIndex(i)))
+      }
+    ],
+    // Not exported: replaced by the colours stored in this browser, if any
+    "key_colors": defaultKeyColors()
+  };
+}
+
+/* Replaces the live profile, resets the selection and syncs every control
+   with the new state, settings dialog inputs included */
+function applyProfile(profile) {
+  state = profile;
+
+  activePageIndex = 0;
+  activeKeyIndex = null;
+  pageMenuOpen = false;
+  hasUnsavedChanges = false;
+
+  // Key colours come from this browser, not from the profile
+  restoreStoredKeyColors();
+  sanitizeState();
+
+  syncProfileNameControl();
+  syncKeyboardLayoutControl();
+  syncMidiChannelControl();
+  syncPageKeyModeControls();
+  syncStandbyControlsFromState();
+  renderAll();
+}
+
+/* ============================================================
+   6. MARKUP TEMPLATES
+   Both action slots use the same form, built by actionFormMarkup:
+   slot 1 = main action, slot 2 = second action (its element ids
+   end in "-2").
+   ============================================================ */
+const CARET = '<span class="caret"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>';
+
+const ARROW_UP   = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15 7-7 7 7"/></svg>';
+const ARROW_DOWN = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m19 9-7 7-7-7"/></svg>';
+
+/* Custom select: trigger + option menu, backed by a hidden native <select>
+   (see section 10) */
+function selectMarkup(id, options, onChange, menuClass = '') {
+  // Options with an icon are marked data-rich, so the trigger shows the icon too
+  const buttons = options.map(([value, label, glyph]) => glyph
+    ? `<button type="button" class="opt" data-value="${value}" data-rich="1">` +
+      `<span class="opt-icon">${glyph}</span><span class="opt-text">${label}</span></button>`
+    : `<button type="button" class="opt" data-value="${value}">${label}</button>`).join('');
+  const natives = options.map(([value, label]) =>
+    `<option value="${value}">${label}</option>`).join('');
+
+  return `<div class="select">
+      <button type="button" class="select-trigger"><span class="select-label"></span>${CARET}</button>
+      <div class="menu${menuClass ? ` ${menuClass}` : ''}" hidden>${buttons}</div>
+      <select id="${id}" onchange="${onChange}">${natives}</select>
+    </div>`;
+}
+
+/* Number input (0-127) with up / down buttons, used for MIDI values */
+function stepperMarkup(id, onInput, onBlur, upCall, downCall) {
+  return `<div class="stepper">
+      <input type="number" id="${id}" class="input" min="0" max="127" oninput="${onInput}" onblur="${onBlur}">
+      <div class="stepper-arrows">
+        <button type="button" tabindex="-1" title="Increase" onclick="${upCall}">${ARROW_UP}</button>
+        <button type="button" tabindex="-1" title="Decrease" onclick="${downCall}">${ARROW_DOWN}</button>
+      </div>
+    </div>`;
+}
+
+function actionFormMarkup(slot) {
+  const s = slot === 2 ? '-2' : '';
+
+  const segs = TYPE_OPTIONS.map(([value, label, glyph]) =>
+    `<button type="button" class="seg" data-value="${value}" aria-pressed="false"
+             title="${label}" onclick="updateActionType('${value}', ${slot})">${glyph}<span>${label}</span></button>`
+  ).join('');
+
+  return `
+  <div class="field">
+    <span class="label">Type</span>
+    <div class="segmented" id="type-picker${s}">${segs}</div>
+  </div>
+
+  <div class="subform" id="subform-shortcut${s}" data-slot="${slot}" hidden>
+    <div class="field">
+      <div class="field-head">
+        <span class="label">Keys</span>
+        <button type="button" class="capture-btn" id="capture-btn${s}"
+                title="Record a shortcut straight from the keyboard"
+                onclick="toggleShortcutCapture(${slot})">
+          <span class="capture-dot"></span><span id="capture-btn-text${s}">Capture</span>
+        </button>
+      </div>
+      <div class="tag-box" id="shortcut-tags-container${s}"></div>
+      <p class="hint" id="capture-hint${s}" hidden>
+        Press the shortcut — Esc cancels. Combinations the browser keeps (Cmd+Q, Alt+Tab) must be added by hand.
+      </p>
+    </div>
+
+    <div class="field">
+      <label class="label" for="key-search${s}">Add key</label>
+      <div style="position:relative">
+        <input type="text" id="key-search${s}" class="input mono" autocomplete="off"
+               placeholder="Search a key code"
+               oninput="filterKeycodes(this.value, ${slot})"
+               onkeydown="handleKeycodeSearchKeys(event, ${slot})">
+        <div class="menu scrolling" id="key-search-results${s}" hidden></div>
+      </div>
+      <div class="quick-keys">
+        <button type="button" onclick="addShortcutCommand('KEY_LEFT_CTRL', ${slot})">Ctrl</button>
+        <button type="button" onclick="addShortcutCommand('KEY_LEFT_ALT', ${slot})">Alt</button>
+        <button type="button" onclick="addShortcutCommand('KEY_LEFT_SHIFT', ${slot})">Shift</button>
+        <button type="button" onclick="addShortcutCommand('KEY_LEFT_GUI', ${slot})">WIN/<span class="glyph">&#8984;</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="subform" id="subform-multimedia${s}" data-slot="${slot}" hidden>
+    <div class="field">
+      <span class="label">Command</span>
+      ${selectMarkup(`field-media-cmd${s}`, MEDIA_OPTIONS, `updateMultimediaCommand(this.value, ${slot})`)}
+    </div>
+  </div>
+
+  <div class="subform" id="subform-midi${s}" data-slot="${slot}" hidden>
+    <div class="field">
+      <span class="label">Command</span>
+      ${selectMarkup(`field-midi-cmd${s}`, MIDI_OPTIONS, `updateMidiFields(${slot})`)}
+      <p class="hint hint-spaced" id="midi-channel-hint${s}"></p>
+    </div>
+
+    <div class="field" id="midi-inputs-row${s}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field" style="margin:0">
+          <span class="label" id="midi-val1-label${s}">Note</span>
+          ${stepperMarkup(`field-midi-v1${s}`,
+              `updateMidiFields(${slot}, false)`,
+              `finalizeMidiField('field-midi-v1', 60, ${slot})`,
+              `stepMidiField('field-midi-v1', 1, 60, ${slot})`,
+              `stepMidiField('field-midi-v1', -1, 60, ${slot})`)}
+        </div>
+        <div class="field" style="margin:0">
+          <span class="label" id="midi-val2-label${s}">Velocity</span>
+          ${stepperMarkup(`field-midi-v2${s}`,
+              `updateMidiFields(${slot}, false)`,
+              `finalizeMidiField('field-midi-v2', 127, ${slot})`,
+              `stepMidiField('field-midi-v2', 1, 127, ${slot})`,
+              `stepMidiField('field-midi-v2', -1, 127, ${slot})`)}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="subform" id="subform-text${s}" data-slot="${slot}" hidden>
+    <div class="field">
+      <label class="label" for="field-text${s}">Text</label>
+      <textarea id="field-text${s}" class="input scroller" rows="4" spellcheck="false"
+                oninput="updateTextCommand(${slot})"
+                placeholder="Text sent by this key&#10;Enter starts a new line"></textarea>
+    </div>
+  </div>
+
+  <div class="subform" id="subform-device${s}" data-slot="${slot}" hidden>
+    <div class="field">
+      <span class="label">Action</span>
+      ${selectMarkup(`field-device-action${s}`, DEVICE_OPTIONS, `updateDeviceAction(this.value, ${slot})`)}
+    </div>
+
+    <p class="hint hint-spaced" id="device-hint${s}" hidden></p>
+
+    <div class="field" id="device-page-row${s}" hidden>
+      <span class="label">Page</span>
+      ${selectMarkup(`field-device-page${s}`, [], `updateDevicePageTarget(this.value, ${slot})`, 'scrolling')}
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   7. DEVICE SCAFFOLD
+   4 OLED screens of 3 rows, 12 keycaps in 4 columns of 3.
+   Key id = (column * 3) + row + 1, matching the firmware wiring.
+   ============================================================ */
+function buildDevice() {
+  const screens = $('screens');
+  const keys = $('keys');
+  screens.innerHTML = '';
+  keys.innerHTML = '';
+
+  for (let col = 0; col < 4; col++) {
+    const screen = document.createElement('div');
+    screen.className = 'oled';
+    for (let row = 0; row < 3; row++) {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'oled-row';
+      rowEl.id = `oled-row-${idFromIndex((col * 3) + row)}`;
+      rowEl.appendChild(document.createElement('span'));
+      screen.appendChild(rowEl);
+    }
+    screens.appendChild(screen);
+  }
+
+  // grid-auto-flow:column over 3 rows, so appending key 1..12 fills column by column
+  for (let keyIndex = 0; keyIndex < KEY_COUNT; keyIndex++) {
+    const keyId = idFromIndex(keyIndex);
+    const keyBtn = document.createElement('button');
+    keyBtn.type = 'button';
+    keyBtn.className = 'keycap';
+    keyBtn.id = `hw-key-${keyId}`;
+    keyBtn.title = `Key ${keyId}`;
+    keyBtn.addEventListener('click', () => pressKey(keyIndex));
+    keyBtn.innerHTML = '<span class="cap"><span></span></span>';
+    keys.appendChild(keyBtn);
+  }
+}
+
+/* ============================================================
+   8. RENDERING
+   ============================================================ */
+// Full repaint: page list, device preview, key editor and save status
+function renderAll() {
+  renderPagesList();
+  renderHardwareView();
+  renderEditorPanel();
+  renderSaveStatus();
+}
+
+/* ---------------- pages column ---------------- */
+function renderPagesList() {
+  const container = $('pages-list');
+  container.innerHTML = '';
+
+  const count = $('pages-count');
+  if (count) count.textContent = state.pages.length;
+
+  state.pages.forEach((page, index) => {
+    const card = document.createElement('div');
+    card.className = `page-card${index === activePageIndex ? ' is-active' : ''}`;
+    card.onclick = () => selectPage(index);
+
+    // Head: page number and move / delete buttons.
+    // Body: name input and visibility switch
+    card.innerHTML = `
+      <div class="page-card-top">
+        <span class="page-index">${idFromIndex(index)}</span>
+        <div class="page-card-actions">
+          <button type="button" class="btn-icon move" title="Move up" ${index === 0 ? 'disabled' : ''}
+                  onclick="event.stopPropagation(); movePage(${index}, 'up', event)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15 7-7 7 7"/></svg>
+          </button>
+          <button type="button" class="btn-icon move" title="Move down" ${index === state.pages.length - 1 ? 'disabled' : ''}
+                  onclick="event.stopPropagation(); movePage(${index}, 'down', event)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 9-7 7-7-7"/></svg>
+          </button>
+          <button type="button" class="btn-icon danger" title="Delete page"
+                  onclick="event.stopPropagation(); deletePage(${index}, event)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="page-card-body">
+        <div class="page-name counted">
+          <input type="text" class="input" maxlength="14" placeholder="PAGE NAME"
+                 value="${escapeHtml(page.name)}"
+                 spellcheck="false" autocapitalize="characters"
+                 onclick="event.stopPropagation()"
+                 oninput="updatePageTitle(${index}, this)"
+                 onchange="renamePage(${index}, this.value)">
+          <span class="counter" id="page-title-count-${index}">${(page.name || '').length}/${NAME_MAX_LENGTH}</span>
+        </div>
+
+        <div class="row-toggle" onclick="event.stopPropagation()">
+          <div class="row-text"><span class="row-title">Visible</span></div>
+          <label class="switch" title="${page.visible ? 'Hide this page on the device' : 'Show this page on the device'}">
+            <input type="checkbox" ${page.visible ? 'checked' : ''} onchange="togglePageVisibility(${index}, event)">
+            <span class="track"></span>
+          </label>
+        </div>
+      </div>`;
+
+    container.appendChild(card);
+  });
+}
+
+/* ---------------- device preview ---------------- */
+/* Sets an OLED row's text and style. separator draws a line under the row:
+   'light' between two normal rows, 'dark' next to an inverted one */
+function paintOledRow(rowEl, label, inverted, separator) {
+  rowEl.className = `oled-row${inverted ? ' inv' : ''}${separator ? ` sep-${separator}` : ''}`;
+  rowEl.firstElementChild.textContent = label;
+}
+
+/* A single row that fills the whole screen */
+function buildOledRow(label, inverted) {
+  const rowEl = document.createElement('div');
+  rowEl.appendChild(document.createElement('span'));
+  paintOledRow(rowEl, label, inverted, null);
+  return rowEl;
+}
+
+/* "← BACK" row, shown on the page key screen while a subpage is open */
+function buildOledBackRow() {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'oled-row';
+  rowEl.innerHTML = `<span class="oled-back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12H2"/><path d="m9 5-7 7 7 7"/></svg>BACK</span>`;
+  return rowEl;
+}
+
+/* Page menu prompt for the page key screen, as drawn by the firmware's
+   renderPageMenu(). The "n/N" counter is shown only when the menu spans more
+   than one screen */
+function buildOledMenuRow(screen, screens) {
+  const counter = screens > 1
+    ? `<span class="oled-menu-count">${screen + 1}/${screens}</span>`
+    : '';
+
+  const rowEl = document.createElement('div');
+  rowEl.className = 'oled-row';
+  rowEl.innerHTML = `<span class="oled-menu"><span class="oled-menu-block"><svg class="oled-menu-icon" viewBox="0 0 16 22" fill="currentColor"><path d="M0 0 16 16 6 16 0 22Z"/></svg><span class="oled-menu-lines"><span>CHOOSE A</span><span>PAGE<span class="oled-dots"><i></i><i></i><i></i></span></span></span></span>${counter}</span>`;
+  return rowEl;
+}
+
+/* Page list scrollbar, computed in the firmware's pixel units (64px tall
+   panel) and converted to percentages. The thumb length is proportional to
+   the visible rows (min 8px), its position to the first row shown */
+function buildOledScrollbar(firstShown, total, shown) {
+  const PANEL_H = 64, PAD = 3, MIN = 8;
+  const trackH = PANEL_H - 2 * PAD;
+
+  const thumbH = Math.min(trackH, Math.max(MIN, Math.floor(trackH * shown / total)));
+  const span = total - shown;
+  const y = PAD + (span > 0 ? Math.floor((trackH - thumbH) * firstShown / span) : 0);
+
+  const bar = document.createElement('div');
+  bar.className = 'oled-bar';
+  bar.style.top = `${y / PANEL_H * 100}%`;
+  bar.style.height = `${thumbH / PANEL_H * 100}%`;
+  return bar;
+}
+
+function renderHardwareView() {
+  const activePage = state.pages[activePageIndex];
+  if (!activePage) return;
+
+  // --- page key screen: same cases as the firmware's renderPageScreen() ---
+  const pageSwitch = $('page-switch-display');
+  if (pageSwitch) {
+    const visiblePages = state.pages.filter(page => page.visible);
+    pageSwitch.innerHTML = '';
+    pageSwitch.classList.remove('has-bar');
+
+    if (pageMenuOpen) {
+      // Page menu open: prompt to choose a page
+      pageSwitch.appendChild(buildOledMenuRow(pageMenuScreenIndex(), pageMenuScreenCount()));
+
+    } else if (!activePage.visible) {
+      // Hidden page (subpage): the page key goes back
+      pageSwitch.appendChild(buildOledBackRow());
+
+    } else if (state.page_key_mode === 'PAGE_MENU' || visiblePages.length <= 1) {
+      // Page menu mode or a single visible page: current page name only,
+      // not inverted
+      pageSwitch.appendChild(buildOledRow(activePage.name || 'EMPTY', false));
+
+    } else {
+      // List of up to three visible pages around the current one (inverted)
+      let rows;
+      let start = 0;
+      if (visiblePages.length <= 3) {
+        rows = visiblePages;
+      } else {
+        const selected = visiblePages.findIndex(page => page.page_id === activePage.page_id);
+        start = Math.max(0, Math.min(selected - 1, visiblePages.length - 3));
+        rows = visiblePages.slice(start, start + 3);
+      }
+
+      // More than three visible pages: show the scrollbar
+      const scrolling = visiblePages.length > rows.length;
+      pageSwitch.classList.toggle('has-bar', scrolling);
+
+      rows.forEach((page, index) => {
+        const isSelected = page.page_id === activePage.page_id;
+        const rowEl = document.createElement('div');
+        rowEl.appendChild(document.createElement('span'));
+
+        let separator = null;
+        if (index < rows.length - 1) {
+          const nextSelected = rows[index + 1].page_id === activePage.page_id;
+          separator = (isSelected || nextSelected) ? 'dark' : 'light';
+        }
+
+        paintOledRow(rowEl, page.name || 'EMPTY', isSelected, separator);
+        pageSwitch.appendChild(rowEl);
+      });
+
+      if (scrolling) {
+        pageSwitch.appendChild(buildOledScrollbar(start, visiblePages.length, rows.length));
+      }
+    }
+  }
+
+  // While the page menu is open, screens and keycaps show one page per key
+  // instead of the key labels
+  const menuSlots = pageMenuOpen ? getPageMenuSlots() : null;
+
+  // --- the four key screens ---
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 3; row++) {
+      const keyIndex = (col * 3) + row;
+      const rowEl = $(`oled-row-${idFromIndex(keyIndex)}`);
+      if (!rowEl) continue;
+
+      if (menuSlots) {
+        const slotPage = menuSlots[keyIndex];
+        const isCurrent = slotPage !== null && slotPage === activePageIndex;
+
+        // No separator between two empty slots
+        let separator = null;
+        if (row < 2) {
+          const nextSlot = menuSlots[keyIndex + 1];
+          if (slotPage !== null || nextSlot !== null) {
+            separator = (isCurrent || nextSlot === activePageIndex) ? 'dark' : 'light';
+          }
+        }
+
+        const name = slotPage === null ? '' : getDisplayLabel(state.pages[slotPage].name);
+        paintOledRow(rowEl, name, isCurrent, separator);
+        continue;
+      }
+
+      const keyData = activePage.keys[keyIndex];
+      if (!keyData) continue;
+
+      let separator = null;
+      if (row < 2) {
+        const nextKey = activePage.keys[keyIndex + 1];
+        separator = (keyData.inverted || nextKey?.inverted) ? 'dark' : 'light';
+      }
+
+      paintOledRow(rowEl, getDisplayLabel(keyData.label), keyData.inverted, separator);
+    }
+  }
+
+  // --- the twelve keycaps ---
+  const colors = state.key_colors;
+  for (let keyIndex = 0; keyIndex < KEY_COUNT; keyIndex++) {
+    const keyBtn = $(`hw-key-${idFromIndex(keyIndex)}`);
+    if (!keyBtn) continue;
+
+    if (menuSlots) {
+      const slotPage = menuSlots[keyIndex];
+      const isCurrent = slotPage !== null && slotPage === activePageIndex;
+
+      keyBtn.classList.toggle('is-active', isCurrent);
+      keyBtn.classList.toggle('is-empty', slotPage === null);
+      keyBtn.title = slotPage === null
+        ? 'No page on this key'
+        : `Switch to “${state.pages[slotPage].name}”`;
+      keyBtn.querySelector('.cap span').textContent =
+        slotPage === null ? '' : getDisplayLabel(state.pages[slotPage].name);
+      paintKeycap(keyBtn, colors.keys[keyIndex], isCurrent);
+      continue;
+    }
+
+    const keyData = activePage.keys[keyIndex];
+    if (!keyData) continue;
+
+    const isSelected = keyIndex === activeKeyIndex;
+    keyBtn.classList.toggle('is-active', isSelected);
+    keyBtn.classList.remove('is-empty');
+    keyBtn.title = `Key ${idFromIndex(keyIndex)}`;
+    keyBtn.querySelector('.cap span').textContent = getDisplayLabel(keyData.label);
+    paintKeycap(keyBtn, colors.keys[keyIndex], isSelected);
+  }
+
+  // Page key: highlighted only while the page menu is open
+  const pageKey = $('page-key');
+  if (pageKey) {
+    paintKeycap(pageKey, colors.page_key, pageMenuOpen);
+    pageKey.title = state.page_key_mode === 'PAGE_MENU'
+      ? (pageMenuOpen ? 'Close the page menu' : 'Open the page menu')
+      : 'Cycle to the next visible page';
+  }
+
+  const tip = $('stage-tip');
+  if (tip) {
+    tip.innerHTML = pageMenuOpen
+      ? 'Press a <b>key</b> to open that page.'
+      : 'Select a <b>key</b> to edit it.';
+  }
+}
+
+/* Keycap click: selects the key for editing or, while the page menu is open,
+   opens the page assigned to that key */
+function pressKey(index) {
+  if (pageMenuOpen) {
+    const target = getPageMenuSlots()[index];
+    if (target === null) return;
+
+    pageMenuOpen = false;
+    selectPage(target);
+    return;
+  }
+
+  selectKey(index);
+}
+
+function selectKey(index) {
+  activeKeyIndex = index;
+  renderAll();
+}
+
+function clearKeySelection() {
+  if (activeKeyIndex === null) return;
+  activeKeyIndex = null;
+  renderAll();
+}
+
+/* A click on the preview area outside the keycaps closes the page menu if
+   it is open, otherwise clears the key selection */
+function setupStageDeselect() {
+  const stage = document.querySelector('.stage-body');
+  if (!stage) return;
+
+  stage.addEventListener('click', (event) => {
+    if (event.target.closest('.keycap')) return;
+    if (pageMenuOpen) { closePageMenu(); return; }
+    clearKeySelection();
+  });
+}
+
+/* ============================================================
+   9. PAGE CONTROLLERS
+   ============================================================ */
+function getVisiblePageIndexes() {
+  return state.pages
+    .map((page, index) => ({ page, index }))
+    .filter(({ page }) => page.visible)
+    .map(({ index }) => index);
+}
+
+function selectPage(index) {
+  activePageIndex = index;
+  renderAll();
+}
+
+/* GO_TO_PAGE actions store a page number, so after pages are moved or
+   deleted every one of them is rewritten to keep pointing at the same page.
+   mapIndex(oldIndex) returns the page's new index */
+function remapDevicePageTargets(mapIndex) {
+  state.pages.forEach(page => {
+    (page.keys || []).forEach(keyData => {
+      [1, 2].forEach(slot => {
+        if (getActionType(keyData, slot) !== 'DEVICE') return;
+
+        const commands = getActionCommands(keyData, slot);
+        if (commands[0] !== 'GO_TO_PAGE') return;
+
+        const target = mapIndex(indexFromId(commands[1]));
+        setActionCommands(keyData, slot, ["GO_TO_PAGE", `${idFromIndex(target)}`]);
+      });
+    });
+  });
+}
+
+/* Number of page menu screens (12 pages per screen, as on the device) */
+function pageMenuScreenCount() {
+  return Math.max(1, Math.ceil(getVisiblePageIndexes().length / KEY_COUNT));
+}
+
+/* Current menu screen, clamped in case pages were hidden or deleted */
+function pageMenuScreenIndex() {
+  return Math.min(pageMenuScreen, pageMenuScreenCount() - 1);
+}
+
+/* Page index shown on each key of the current menu screen (visible pages
+   only, in order); null for empty slots */
+function getPageMenuSlots() {
+  const visibleIndexes = getVisiblePageIndexes();
+  const base = pageMenuScreenIndex() * KEY_COUNT;
+  return Array.from({ length: KEY_COUNT }, (_, slot) =>
+    base + slot < visibleIndexes.length ? visibleIndexes[base + slot] : null);
+}
+
+function closePageMenu() {
+  if (!pageMenuOpen) return;
+  pageMenuOpen = false;
+  renderHardwareView();
+}
+
+/* Page key press. NEXT_PAGE: cycle through the visible pages.
+   PAGE_MENU: open the menu, step through its screens, close after the last */
+function pressPageKey() {
+  if (state.page_key_mode !== 'PAGE_MENU') {
+    pageMenuOpen = false;
+    cycleActivePage();
+    return;
+  }
+
+  if (!pageMenuOpen) {
+    // Always opens on the first screen. The device opens on the screen of
+    // the current page and wraps around, but here presses only move forward,
+    // so starting later would make the earlier screens unreachable
+    pageMenuScreen = 0;
+    pageMenuOpen = true;
+    renderHardwareView();
+    return;
+  }
+
+  // Next screen; pressing on the last one closes the menu (on the device a
+  // long press closes it)
+  const next = pageMenuScreenIndex() + 1;
+  if (next >= pageMenuScreenCount()) {
+    closePageMenu();
+    return;
+  }
+  pageMenuScreen = next;
+  renderHardwareView();
+}
+
+function updatePageKeyMode(mode) {
+  const nextMode = normalizePageKeyMode(mode);
+  if (nextMode === state.page_key_mode) return;
+
+  state.page_key_mode = nextMode;
+  if (nextMode !== 'PAGE_MENU') pageMenuOpen = false;
+
+  markDirty();
+  syncPageKeyModeControls();
+  renderHardwareView();
+}
+
+/* Not overwritten while focused, so a refresh never interrupts typing */
+function syncProfileNameControl() {
+  const input = $('profile-name-input');
+  if (input && document.activeElement !== input) input.value = state.profile_name;
+}
+
+/* Syncs the page key mode radios, and the highlighted card, with state */
+function syncPageKeyModeControls() {
+  document.querySelectorAll('input[name="page-key-mode"]').forEach(input => {
+    input.checked = input.value === state.page_key_mode;
+    const card = input.closest('.choice');
+    if (card) card.classList.toggle('is-picked', input.checked);
+  });
+}
+
+function cycleActivePage() {
+  const visibleIndexes = getVisiblePageIndexes();
+  if (visibleIndexes.length === 0) return;
+
+  const current = visibleIndexes.indexOf(activePageIndex);
+  activePageIndex = visibleIndexes[(current + 1) % visibleIndexes.length];
+  renderAll();
+}
+
+/* Rename while typing: updates the counter and the preview without rebuilding
+   the page list, so the input keeps focus */
+function updatePageTitle(index, input) {
+  const sanitized = applyTextInput(input, normalizeDisplayName);
+  state.pages[index].name = sanitized || `PAGE ${idFromIndex(index)}`;
+
+  const counter = $(`page-title-count-${index}`);
+  if (counter) counter.textContent = `${sanitized.length}/${NAME_MAX_LENGTH}`;
+
+  markDirty();
+  renderHardwareView();
+  refreshDevicePageSelects();
+}
+
+/* Rename committed (change event): full re-render */
+function renamePage(index, val) {
+  const sanitized = normalizeDisplayName(val);
+  state.pages[index].name = sanitized || `PAGE ${idFromIndex(index)}`;
+  renderAll();
+}
+
+/* Shows / hides a page on the device; at least one page must stay visible.
+   The page list is updated in place rather than rebuilt, so a name input
+   being edited keeps its focus */
+function togglePageVisibility(index, event) {
+  event.stopPropagation();
+  const visibleIndexes = getVisiblePageIndexes();
+
+  if (state.pages[index].visible && visibleIndexes.length <= 1) {
+    toast('One page must stay visible.', 'err');
+    event.target.checked = true;   // revert the switch
+    return;
+  }
+
+  state.pages[index].visible = !state.pages[index].visible;
+  markDirty();
+
+  const label = event.target.closest('.switch');
+  if (label) label.title = state.pages[index].visible
+    ? 'Hide this page on the device'
+    : 'Show this page on the device';
+
+  // If the active page was hidden, move to the next visible page
+  if (!state.pages[activePageIndex]?.visible) {
+    const remaining = getVisiblePageIndexes();
+    const next = remaining.find(pageIndex => pageIndex >= activePageIndex) ?? remaining[0];
+    if (next !== undefined && next !== activePageIndex) {
+      activePageIndex = next;
+      document.querySelectorAll('#pages-list .page-card').forEach((card, cardIndex) => {
+        card.classList.toggle('is-active', cardIndex === activePageIndex);
+      });
+      renderEditorPanel();
+    }
+  }
+
+  renderHardwareView();
+  // Page selectors mark hidden pages with an icon
+  refreshDevicePageSelects();
+}
+
+function addPage() {
+  const newPageIndex = state.pages.length;
+  const keys = [];
+  for (let i = 0; i < KEY_COUNT; i++) keys.push(createDefaultKey(idFromIndex(i)));
+
+  state.pages.push({
+    page_id: idFromIndex(newPageIndex),
+    name: `PAGE ${idFromIndex(newPageIndex)}`,
+    visible: true,
+    keys: keys
+  });
+
+  markDirty();
+  activePageIndex = newPageIndex;
+  activeKeyIndex = 0;
+  renderAll();
+}
+
+function movePage(index, direction, event) {
+  event.stopPropagation();
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= state.pages.length) return;
+
+  // Apply the same move to a list of indexes to build the old -> new index map
+  const order = state.pages.map((page, pageIdx) => pageIdx);
+  order.splice(targetIndex, 0, ...order.splice(index, 1));
+
+  const [movedPage] = state.pages.splice(index, 1);
+  state.pages.splice(targetIndex, 0, movedPage);
+  state.pages.forEach((page, pageIdx) => { page.page_id = idFromIndex(pageIdx); });
+
+  const movedTo = [];
+  order.forEach((oldIndex, newIndex) => { movedTo[oldIndex] = newIndex; });
+  remapDevicePageTargets(oldIndex => movedTo[oldIndex] ?? oldIndex);
+
+  if (activePageIndex === index) {
+    activePageIndex = targetIndex;
+  } else if (activePageIndex === targetIndex) {
+    activePageIndex = index;
+  }
+
+  markDirty();
+  renderAll();
+}
+
+function deletePage(index, event) {
+  event.stopPropagation();
+
+  if (state.pages.length <= 1) {
+    toast('One page is required.', 'err');
+    return;
+  }
+
+  askConfirm('Delete page', `“${state.pages[index].name}” and its 12 keys will be deleted.`, () => {
+    const wasVisible = state.pages[index].visible;
+
+    // Pages after the deleted one shift up by one; actions that targeted the
+    // deleted page point to the page that takes its place
+    const movedTo = [];
+    state.pages.forEach((page, pageIdx) => {
+      if (pageIdx !== index) movedTo[pageIdx] = pageIdx < index ? pageIdx : pageIdx - 1;
+    });
+    const fallback = Math.max(0, Math.min(index, state.pages.length - 2));
+
+    state.pages.splice(index, 1);
+    remapDevicePageTargets(oldIndex => movedTo[oldIndex] ?? fallback);
+    markDirty();
+
+    if (getVisiblePageIndexes().length === 0) {
+      state.pages[Math.max(0, state.pages.length - 1)].visible = true;
+    }
+
+    if (wasVisible && activePageIndex >= state.pages.length) {
+      activePageIndex = Math.max(0, state.pages.length - 1);
+    }
+
+    sanitizeState();
+    renderAll();
+  });
+}
+
+/* ============================================================
+   10. CUSTOM SELECTS
+   Each .select wraps a hidden native <select> that holds the value
+   and fires the change event; the trigger and the option menu are
+   only its visual front end.
+   ============================================================ */
+function getCustomSelectLabel(selectEl, value) {
+  const option = selectEl.querySelector(`option[value="${value}"]`);
+  return option ? option.textContent : '';
+}
+
+function syncCustomSelectUI(selectEl) {
+  const wrapper = selectEl.closest('.select');
+  if (!wrapper) return;
+
+  const labelEl = wrapper.querySelector('.select-label');
+  if (labelEl) {
+    // Rich options (icon + text) are copied as HTML, plain ones as text
+    const picked = wrapper.querySelector(`.opt[data-value="${selectEl.value}"]`);
+    if (picked && picked.dataset.rich === '1') labelEl.innerHTML = picked.innerHTML;
+    else labelEl.textContent = getCustomSelectLabel(selectEl, selectEl.value);
+  }
+
+  wrapper.querySelectorAll('.opt').forEach(option => {
+    option.classList.toggle('active', option.dataset.value === selectEl.value);
+  });
+}
+
+function closeAllSelects(except) {
+  document.querySelectorAll('.select').forEach(wrapper => {
+    if (wrapper === except) return;
+    wrapper.classList.remove('open');
+    const menu = wrapper.querySelector('.menu');
+    if (menu) menu.hidden = true;
+  });
+}
+
+function bindSelectOptions(wrapper, selectEl, menu) {
+  wrapper.querySelectorAll('.opt').forEach(option => {
+    option.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectEl.value = option.dataset.value;
+      syncCustomSelectUI(selectEl);
+      menu.hidden = true;
+      wrapper.classList.remove('open');
+      releaseMenuSpace();
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+}
+
+function setupCustomSelect(selectEl) {
+  const wrapper = selectEl.closest('.select');
+  if (!wrapper || wrapper.dataset.ready === '1') return;
+  wrapper.dataset.ready = '1';
+
+  const trigger = wrapper.querySelector('.select-trigger');
+  const menu = wrapper.querySelector('.menu');
+
+  trigger.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const willOpen = menu.hidden;
+    closeAllSelects(wrapper);
+    closeKeycodeMenus();
+
+    menu.hidden = !willOpen;
+    wrapper.classList.toggle('open', willOpen);
+
+    if (willOpen) reserveMenuSpace(menu); else releaseMenuSpace();
+  });
+
+  bindSelectOptions(wrapper, selectEl, menu);
+  syncCustomSelectUI(selectEl);
+}
+
+function setupAllSelects() {
+  document.querySelectorAll('.select > select').forEach(setupCustomSelect);
+}
+
+/* ---- page selector: options rebuilt from the current pages ---- */
+const ICON_HIDDEN_PAGE = '<svg class="icon-hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 4.2A9.3 9.3 0 0 1 12 4c5 0 9 4.6 9 8a9.6 9.6 0 0 1-2 3.4M6.6 6.6A11.6 11.6 0 0 0 3 12c0 3.4 4 8 9 8a9.3 9.3 0 0 0 4.4-1.1M3 3l18 18M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+function pageChoiceName(page, index) {
+  return getDisplayLabel(page?.name) || `PAGE ${idFromIndex(index)}`;
+}
+
+/* Rebuilds a page select: every page is listed, hidden ones with an icon */
+function populatePageSelect(selectEl, value) {
+  if (!selectEl) return;
+
+  const wrapper = selectEl.closest('.select');
+  const menu = wrapper?.querySelector('.menu');
+
+  selectEl.innerHTML = state.pages.map((page, index) => {
+    const name = pageChoiceName(page, index);
+    return `<option value="${idFromIndex(index)}">${escapeHtml(page.visible ? name : `${name} (hidden)`)}</option>`;
+  }).join('');
+
+  if (menu) {
+    menu.innerHTML = state.pages.map((page, index) => {
+      const name = escapeHtml(pageChoiceName(page, index));
+      const marker = page.visible ? '' : ICON_HIDDEN_PAGE;
+      const hint = page.visible ? '' : ' title="Hidden on the device"';
+      return `<button type="button" class="opt" data-value="${idFromIndex(index)}" data-rich="1"${hint}>` +
+             `<span class="opt-text">${name}</span>${marker}</button>`;
+    }).join('');
+
+    // New option buttons need click handlers; the trigger keeps its own
+    if (wrapper) bindSelectOptions(wrapper, selectEl, menu);
+  }
+
+  selectEl.value = `${clampPageTarget(value)}`;
+  syncCustomSelectUI(selectEl);
+}
+
+/* ---- scroll room for menus opened near the bottom of a panel ---- */
+const MENU_EDGE_GAP = 16;
+
+function getScrollParent(element) {
+  let node = element.parentElement;
+  while (node) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+function releaseMenuSpace() {
+  document.querySelectorAll('.menu-spacer').forEach(spacer => { spacer.style.height = '0px'; });
+}
+
+/* Makes an open menu fully reachable: grows the panel's .menu-spacer if the
+   menu extends past the scrollable area, then scrolls just enough to show it */
+function reserveMenuSpace(menu) {
+  releaseMenuSpace();
+
+  const scroller = getScrollParent(menu);
+  if (!scroller) return;
+
+  const reach = menu.getBoundingClientRect().bottom + MENU_EDGE_GAP;
+  padScrollerForMenu(scroller, reach);
+  scrollIntoReach(scroller, reach);
+}
+
+/* Grows the spacer until the panel can scroll down to `reach` */
+function padScrollerForMenu(scroller, reach) {
+  const spacer = scroller.querySelector(':scope > .menu-spacer');
+  if (!spacer) return;
+
+  const needed = reach - scroller.getBoundingClientRect().top - scroller.clientTop + scroller.scrollTop;
+
+  // Done in passes: scrollHeight does not always grow 1:1 with the spacer
+  // (e.g. while the content is shorter than the panel)
+  let height = 0;
+  for (let pass = 0; pass < 5; pass++) {
+    const shortfall = Math.ceil(needed - scroller.scrollHeight);
+    if (shortfall <= 0) break;
+    height += shortfall;
+    spacer.style.height = `${height}px`;
+  }
+}
+
+/* Scrolls the panel by the minimum amount that brings `reach` into view */
+function scrollIntoReach(scroller, reach) {
+  const visibleBottom = scroller.getBoundingClientRect().top + scroller.clientTop + scroller.clientHeight;
+  const overflow = Math.ceil(reach - visibleBottom);
+  if (overflow <= 0) return;
+
+  scroller.scrollTo({ top: scroller.scrollTop + overflow, behavior: 'smooth' });
+}
+
+/* ============================================================
+   11. KEY EDITOR
+   ============================================================ */
+// Element ids of action slot 2 end in "-2"
+function slotFieldId(baseId, slot) {
+  return slot === 2 ? `${baseId}-2` : baseId;
+}
+
+function getSlotElement(baseId, slot) {
+  return $(slotFieldId(baseId, slot));
+}
+
+function getActiveKeyData() {
+  const activePage = state.pages[activePageIndex];
+  if (!activePage || activeKeyIndex === null) return null;
+  return activePage.keys[activeKeyIndex] || null;
+}
+
+// Accessors for an action slot: 1 = type / commands,
+// 2 = second_action_type / second_action_commands
+function getActionType(keyData, slot) {
+  const type = slot === 2 ? keyData.second_action_type : keyData.type;
+  return ACTION_TYPES.includes(type) ? type : "SHORTCUT";
+}
+
+function setActionType(keyData, slot, type) {
+  if (slot === 2) keyData.second_action_type = type;
+  else keyData.type = type;
+}
+
+function getActionCommands(keyData, slot) {
+  const commands = slot === 2 ? keyData.second_action_commands : keyData.commands;
+  return Array.isArray(commands) ? commands : [];
+}
+
+function setActionCommands(keyData, slot, commands) {
+  if (slot === 2) keyData.second_action_commands = commands;
+  else keyData.commands = commands;
+}
+
+function renderEditorPanel() {
+  // Re-rendering cancels any shortcut capture in progress
+  stopShortcutCapture();
+
+  const keyData = getActiveKeyData();
+  const editorEl = $('key-editor');
+  const placeholderEl = $('no-key-selected');
+
+  if (!keyData) {
+    show(editorEl, false);
+    show(placeholderEl, true);
+    // The key badge is in the panel head, outside the editor
+    show($('edit-key-id'), false);
+    return;
+  }
+
+  show(editorEl, true);
+  show(placeholderEl, false);
+
+  show($('edit-key-id'), true);
+  $('edit-key-id').textContent = `Key ${idFromIndex(activeKeyIndex)}`;
+
+  const labelInput = $('field-label');
+  if (document.activeElement !== labelInput) labelInput.value = keyData.label;
+  $('char-limit-badge').textContent = `${keyData.label.length}/${NAME_MAX_LENGTH}`;
+
+  $('field-inverted').checked = keyData.inverted;
+
+  const secondEnabled = Boolean(keyData.second_action_enabled);
+  $('field-second-enabled').checked = secondEnabled;
+  show($('second-action-panel'), secondEnabled);
+  // Green header while the second action is enabled
+  $('second-action-section').classList.toggle('is-on', secondEnabled);
+
+  const delayInput = $('field-second-delay');
+  if (delayInput && document.activeElement !== delayInput) {
+    delayInput.value = formatDelayValue(keyData.second_action_delay);
+  }
+
+  renderActionForm(keyData, 1);
+  renderActionForm(keyData, 2);
+}
+
+// Updates the type picker and shows the matching sub-form for one action slot
+function renderActionForm(keyData, slot) {
+  const type = getActionType(keyData, slot);
+  const commands = getActionCommands(keyData, slot);
+
+  const picker = getSlotElement('type-picker', slot);
+  if (picker) {
+    picker.querySelectorAll('.seg').forEach(seg => {
+      const isLive = seg.dataset.value === type;
+      seg.classList.toggle('is-on', isLive);
+      seg.setAttribute('aria-pressed', isLive ? 'true' : 'false');
+    });
+  }
+
+  document.querySelectorAll(`.subform[data-slot="${slot}"]`).forEach(panel => { panel.hidden = true; });
+
+  if (type === 'SHORTCUT') {
+    show(getSlotElement('subform-shortcut', slot), true);
+    renderShortcutTags(slot);
+
+  } else if (type === 'MULTIMEDIA') {
+    show(getSlotElement('subform-multimedia', slot), true);
+    const mediaSelect = getSlotElement('field-media-cmd', slot);
+    if (mediaSelect) {
+      mediaSelect.value = commands[0] || "MEDIA_PLAY_PAUSE";
+      syncCustomSelectUI(mediaSelect);
+    }
+
+  } else if (type === 'MIDI') {
+    show(getSlotElement('subform-midi', slot), true);
+
+    const midiCmd = commands[0] || "NOTE_ON";
+    const midiSelect = getSlotElement('field-midi-cmd', slot);
+    if (midiSelect) {
+      midiSelect.value = midiCmd;
+      syncCustomSelectUI(midiSelect);
+    }
+
+    const isMMC = midiCmd.startsWith('MMC_');
+    const inputsRow = getSlotElement('midi-inputs-row', slot);
+    show(inputsRow, !isMMC);
+    renderMidiChannelHint(slot, isMMC);
+
+    if (!isMMC) {
+      const label1 = getSlotElement('midi-val1-label', slot);
+      const label2 = getSlotElement('midi-val2-label', slot);
+
+      if (midiCmd === 'CONTROL_CHANGE') {
+        label1.textContent = "Controller";
+        label2.textContent = "Value";
+      } else {
+        label1.textContent = "Note";
+        label2.textContent = "Velocity";
+      }
+
+      getSlotElement('field-midi-v1', slot).value = commands[1] || "60";
+      getSlotElement('field-midi-v2', slot).value = commands[2] || "127";
+    }
+
+  } else if (type === 'TEXT') {
+    show(getSlotElement('subform-text', slot), true);
+    const textInput = getSlotElement('field-text', slot);
+    // Not overwritten while focused, so the caret does not jump
+    if (textInput && document.activeElement !== textInput) {
+      textInput.value = commands[0] || "";
+    }
+
+  } else if (type === 'DEVICE') {
+    show(getSlotElement('subform-device', slot), true);
+
+    const action = DEVICE_ACTIONS.includes(commands[0]) ? commands[0] : DEVICE_ACTIONS[0];
+    const actionSelect = getSlotElement('field-device-action', slot);
+    if (actionSelect) {
+      actionSelect.value = action;
+      syncCustomSelectUI(actionSelect);
+    }
+
+    // Page selector only for GO_TO_PAGE
+    const isPageJump = action === 'GO_TO_PAGE';
+    show(getSlotElement('device-page-row', slot), isPageJump);
+    if (isPageJump) populatePageSelect(getSlotElement('field-device-page', slot), commands[1]);
+
+    const hintEl = getSlotElement('device-hint', slot);
+    if (hintEl) {
+      const hintText = DEVICE_HINTS[action] || '';
+      hintEl.textContent = hintText;
+      show(hintEl, !!hintText);
+    }
+  }
+}
+
+/* ============================================================
+   12. FIELD HANDLERS
+   ============================================================ */
+function updateCurrentKeyLabel(input) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  const label = applyTextInput(input, normalizeDisplayName);
+  keyData.label = label;
+  markDirty();
+
+  $('char-limit-badge').textContent = `${label.length}/${NAME_MAX_LENGTH}`;
+  renderHardwareView();
+}
+
+function updateCurrentKeyInverted(checked) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  keyData.inverted = checked;
+  markDirty();
+  renderHardwareView();
+}
+
+function updateActionType(type, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  setActionType(keyData, slot, type);
+  setActionCommands(keyData, slot, defaultCommandsForType(type));
+
+  markDirty();
+  renderAll();
+}
+
+/* ---- device actions ---- */
+/* Default GO_TO_PAGE target: the first page other than the current one */
+function defaultDevicePageTarget() {
+  const other = state.pages.findIndex((page, index) => index !== activePageIndex);
+  return idFromIndex(other === -1 ? activePageIndex : other);
+}
+
+function updateDeviceAction(action, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  setActionCommands(keyData, slot, normalizeDeviceCommands([action, defaultDevicePageTarget()]));
+  markDirty();
+  renderEditorPanel();
+}
+
+function updateDevicePageTarget(value, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  setActionCommands(keyData, slot, ["GO_TO_PAGE", `${clampPageTarget(value)}`]);
+  markDirty();
+}
+
+/* Refreshes the visible page selectors after a rename or visibility change,
+   without re-rendering the whole editor */
+function refreshDevicePageSelects() {
+  [1, 2].forEach(slot => {
+    const row = getSlotElement('device-page-row', slot);
+    if (!row || row.hidden) return;
+
+    const pageSelect = getSlotElement('field-device-page', slot);
+    if (pageSelect) populatePageSelect(pageSelect, pageSelect.value);
+  });
+}
+
+/* ---- second action ---- */
+function updateSecondActionEnabled(checked) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  keyData.second_action_enabled = checked;
+  markDirty();
+  renderEditorPanel();
+}
+
+function updateSecondActionDelay() {
+  const keyData = getActiveKeyData();
+  const delayInput = $('field-second-delay');
+  if (!keyData || !delayInput) return;
+
+  // A comma is accepted as decimal separator and shown as a dot
+  if (delayInput.value.includes(',')) {
+    const caret = delayInput.selectionStart;
+    delayInput.value = delayInput.value.replace(/,/g, '.');
+    delayInput.setSelectionRange(caret, caret);
+  }
+
+  keyData.second_action_delay = normalizeDelayValue(delayInput.value, 0);
+  markDirty();
+}
+
+// Arrow Up / Down step the value, like a native number input
+function handleSecondActionDelayKeys(event) {
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+  event.preventDefault();
+  stepSecondActionDelay(event.key === 'ArrowUp' ? 0.5 : -0.5);
+}
+
+function finalizeSecondActionDelay() {
+  const delayInput = $('field-second-delay');
+  if (!delayInput) return;
+
+  delayInput.value = formatDelayValue(delayInput.value);
+  updateSecondActionDelay();
+}
+
+function stepSecondActionDelay(delta) {
+  const delayInput = $('field-second-delay');
+  if (!delayInput) return;
+
+  delayInput.value = formatDelayValue(normalizeDelayValue(delayInput.value, 0) + delta);
+  updateSecondActionDelay();
+}
+
+/* ---- shortcut key list ---- */
+function renderShortcutTags(slot) {
+  const keyData = getActiveKeyData();
+  const container = getSlotElement('shortcut-tags-container', slot);
+  if (!keyData || !container) return;
+
+  const commands = getActionCommands(keyData, slot);
+  container.innerHTML = '';
+
+  if (commands.length === 0) {
+    container.innerHTML = '<span class="tag-empty">No key codes assigned yet</span>';
+    return;
+  }
+
+  commands.forEach((cmd, idx) => {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.innerHTML = `<span>${escapeHtml(cmd)}</span>
+      <button type="button" title="Remove" onclick="removeShortcutCommand(${idx}, ${slot})">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>`;
+    container.appendChild(tag);
+  });
+}
+
+function addShortcutCommand(cmd, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  const commands = getActionCommands(keyData, slot);
+  commands.push(cmd);
+  setActionCommands(keyData, slot, commands);
+  markDirty();
+
+  renderShortcutTags(slot);
+
+  const dropdown = getSlotElement('key-search-results', slot);
+  if (dropdown) dropdown.hidden = true;
+  releaseMenuSpace();
+
+  const searchInput = getSlotElement('key-search', slot);
+  if (searchInput) searchInput.value = '';
+}
+
+function removeShortcutCommand(index, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  const commands = getActionCommands(keyData, slot);
+  commands.splice(index, 1);
+  setActionCommands(keyData, slot, commands);
+  markDirty();
+  renderShortcutTags(slot);
+}
+
+/* ---- shortcut capture ---- */
+// Uses event.code (physical key position) rather than event.key, so the
+// captured keys match the HID codes the firmware sends, whatever the OS
+// keyboard layout
+const CAPTURE_MODIFIERS = {
+  ControlLeft: "KEY_LEFT_CTRL",  ControlRight: "KEY_RIGHT_CTRL",
+  ShiftLeft:   "KEY_LEFT_SHIFT", ShiftRight:   "KEY_RIGHT_SHIFT",
+  AltLeft:     "KEY_LEFT_ALT",   AltRight:     "KEY_RIGHT_ALT",
+  MetaLeft:    "KEY_LEFT_GUI",   MetaRight:    "KEY_RIGHT_GUI"
+};
+
+// event.code -> key code, for every key in KEYCODES_POOL; others are rejected
+const CAPTURE_KEYCODES = (() => {
+  const map = { ...CAPTURE_MODIFIERS };
+
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('').forEach(letter => { map[`Key${letter}`] = `KEY_${letter}`; });
+  for (let digit = 0; digit <= 9; digit++) map[`Digit${digit}`] = `KEY_${digit}`;
+  for (let fn = 1; fn <= 12; fn++) map[`F${fn}`] = `KEY_F${fn}`;
+
+  Object.assign(map, {
+    Enter: "KEY_ENTER", NumpadEnter: "KEY_ENTER", Escape: "KEY_ESC",
+    Backspace: "KEY_BACKSPACE", Tab: "KEY_TAB", Space: "KEY_SPACE",
+    Minus: "KEY_MINUS", Equal: "KEY_EQUAL",
+    BracketLeft: "KEY_LEFT_BRACE", BracketRight: "KEY_RIGHT_BRACE",
+    Backslash: "KEY_BACKSLASH", Semicolon: "KEY_SEMICOLON", Quote: "KEY_APOSTROPHE",
+    Backquote: "KEY_GRAVE", Comma: "KEY_COMMA", Period: "KEY_PERIOD", Slash: "KEY_SLASH",
+    CapsLock: "KEY_CAPS_LOCK", PrintScreen: "KEY_PRINTSCREEN", ScrollLock: "KEY_SCROLL_LOCK",
+    Pause: "KEY_PAUSE", Insert: "KEY_INSERT", Home: "KEY_HOME", PageUp: "KEY_PAGE_UP",
+    Delete: "KEY_DELETE", End: "KEY_END", PageDown: "KEY_PAGE_DOWN",
+    ArrowRight: "KEY_RIGHT", ArrowLeft: "KEY_LEFT", ArrowDown: "KEY_DOWN", ArrowUp: "KEY_UP"
+  });
+
+  return map;
+})();
+
+// { slot, captured: [key codes], held: Set of event.code still down }
+let captureSession = null;
+
+function isCaptureModifier(code) {
+  return Object.prototype.hasOwnProperty.call(CAPTURE_MODIFIERS, code);
+}
+
+function toggleShortcutCapture(slot) {
+  if (captureSession && captureSession.slot === slot) {
+    stopShortcutCapture();
+    return;
+  }
+  startShortcutCapture(slot);
+}
+
+function startShortcutCapture(slot) {
+  if (!getActiveKeyData()) return;
+
+  stopShortcutCapture();
+  closeAllSelects();
+  closeKeycodeMenus();
+  releaseMenuSpace();
+
+  captureSession = { slot, captured: [], held: new Set() };
+
+  // Capture phase on window: key presses are intercepted before any other
+  // handler, including the global Escape handler
+  window.addEventListener('keydown', handleCaptureKeyDown, true);
+  window.addEventListener('keyup', handleCaptureKeyUp, true);
+  window.addEventListener('blur', stopShortcutCapture);
+
+  setCaptureUI(slot, true);
+  renderCapturePreview();
+}
+
+// Ends the capture without changing the saved keys
+function stopShortcutCapture() {
+  if (!captureSession) return;
+
+  const { slot } = captureSession;
+  window.removeEventListener('keydown', handleCaptureKeyDown, true);
+  window.removeEventListener('keyup', handleCaptureKeyUp, true);
+  window.removeEventListener('blur', stopShortcutCapture);
+  captureSession = null;
+
+  setCaptureUI(slot, false);
+  renderShortcutTags(slot);
+}
+
+// The captured combination replaces the current key list
+function commitShortcutCapture() {
+  if (!captureSession || captureSession.captured.length === 0) return;
+
+  const { slot, captured } = captureSession;
+  const keyData = getActiveKeyData();
+
+  stopShortcutCapture();
+  if (!keyData) return;
+
+  setActionCommands(keyData, slot, captured);
+  markDirty();
+  renderShortcutTags(slot);
+  toast(`Shortcut captured: ${captured.join(' + ')}`, 'ok');
+}
+
+function handleCaptureKeyDown(event) {
+  if (!captureSession) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
+
+  const code = event.code;
+  const withModifier = event.ctrlKey || event.altKey || event.shiftKey || event.metaKey;
+
+  // Esc alone cancels; together with a modifier it is recorded as a key
+  if (code === 'Escape' && !withModifier) {
+    stopShortcutCapture();
+    return;
+  }
+
+  const keycode = CAPTURE_KEYCODES[code];
+  if (!keycode) {
+    toast(`No key code for "${event.key || code}" — the pool covers the US 104 key set only`, 'err');
+    return;
+  }
+
+  captureSession.held.add(code);
+  if (!captureSession.captured.includes(keycode)) captureSession.captured.push(keycode);
+  renderCapturePreview();
+
+  // A non-modifier key completes the combination
+  if (!isCaptureModifier(code)) commitShortcutCapture();
+}
+
+function handleCaptureKeyUp(event) {
+  if (!captureSession) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  captureSession.held.delete(event.code);
+
+  // Modifier-only combinations (e.g. Ctrl+Shift) complete when all keys are released
+  if (captureSession.held.size === 0 && captureSession.captured.length > 0) commitShortcutCapture();
+}
+
+function setCaptureUI(slot, recording) {
+  const button = getSlotElement('capture-btn', slot);
+  const buttonText = getSlotElement('capture-btn-text', slot);
+  const tagBox = getSlotElement('shortcut-tags-container', slot);
+
+  if (button) button.classList.toggle('is-recording', recording);
+  if (buttonText) buttonText.textContent = recording ? 'Recording' : 'Capture';
+  if (tagBox) tagBox.classList.toggle('is-capturing', recording);
+  show(getSlotElement('capture-hint', slot), recording);
+}
+
+// Live preview of the keys pressed so far (not saved until committed)
+function renderCapturePreview() {
+  if (!captureSession) return;
+
+  const container = getSlotElement('shortcut-tags-container', captureSession.slot);
+  if (!container) return;
+
+  if (captureSession.captured.length === 0) {
+    container.innerHTML = '<span class="tag-empty">Waiting for a key combination…</span>';
+    return;
+  }
+
+  container.innerHTML = captureSession.captured
+    .map(cmd => `<span class="tag is-live">${escapeHtml(cmd)}</span>`)
+    .join('');
+}
+
+/* ---- key code autocomplete ---- */
+// Search rank, best first: exact code, exact name (after "KEY_"),
+// name prefix, code prefix, substring
+function rankKeycode(key, query) {
+  const code = key.toLowerCase();
+  const name = code.startsWith('key_') ? code.slice(4) : code;
+
+  if (code === query) return 0;
+  if (name === query) return 1;
+  if (name.startsWith(query)) return 2;
+  if (code.startsWith(query)) return 3;
+  return 4;
+}
+
+function highlightKeycodeOption(dropdown, index) {
+  const items = [...dropdown.querySelectorAll('.opt')];
+  items.forEach((item, i) => item.classList.toggle('active', i === index));
+  items[index]?.scrollIntoView({ block: 'nearest' });
+}
+
+function closeKeycodeMenus() {
+  [1, 2].forEach(slot => {
+    const dropdown = getSlotElement('key-search-results', slot);
+    if (dropdown && !dropdown.hidden) dropdown.hidden = true;
+  });
+}
+
+function filterKeycodes(searchVal, slot) {
+  const dropdown = getSlotElement('key-search-results', slot);
+  if (!dropdown) return;
+  dropdown.innerHTML = '';
+
+  if (!searchVal) {
+    dropdown.hidden = true;
+    releaseMenuSpace();
+    return;
+  }
+
+  const query = searchVal.toLowerCase();
+  const filtered = KEYCODES_POOL
+    .filter(key => key.toLowerCase().includes(query))
+    .sort((a, b) => {
+      const rankDiff = rankKeycode(a, query) - rankKeycode(b, query);
+      if (rankDiff !== 0) return rankDiff;
+      if (a.length !== b.length) return a.length - b.length;
+      return a.localeCompare(b);
+    });
+
+  if (filtered.length === 0) {
+    dropdown.hidden = true;
+    releaseMenuSpace();
+    return;
+  }
+
+  closeAllSelects();
+  dropdown.hidden = false;
+
+  filtered.forEach(key => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'opt mono';
+    item.textContent = key;
+    item.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      addShortcutCommand(key, slot);
+    });
+    dropdown.appendChild(item);
+  });
+
+  // Preselect the best match so Enter alone confirms it
+  highlightKeycodeOption(dropdown, 0);
+
+  // Measured once the results are in place, since the height depends on them
+  reserveMenuSpace(dropdown);
+}
+
+// Enter picks the highlighted result, arrows move through the list
+function handleKeycodeSearchKeys(event, slot) {
+  const dropdown = getSlotElement('key-search-results', slot);
+  if (!dropdown || dropdown.hidden) return;
+
+  const items = [...dropdown.querySelectorAll('.opt')];
+  if (items.length === 0) return;
+
+  const current = Math.max(0, items.findIndex(item => item.classList.contains('active')));
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addShortcutCommand(items[current].textContent, slot);
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    highlightKeycodeOption(dropdown, (current + 1) % items.length);
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    highlightKeycodeOption(dropdown, (current - 1 + items.length) % items.length);
+  } else if (event.key === 'Escape') {
+    dropdown.hidden = true;
+    releaseMenuSpace();
+  }
+}
+
+/* ---- multimedia / text / midi ---- */
+function updateMultimediaCommand(val, slot) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  setActionCommands(keyData, slot, [val]);
+  markDirty();
+}
+
+// The raw string, line breaks included, is kept as commands[0]
+function updateTextCommand(slot) {
+  const keyData = getActiveKeyData();
+  const textInput = getSlotElement('field-text', slot);
+  if (!keyData || !textInput) return;
+
+  setActionCommands(keyData, slot, [textInput.value]);
+  markDirty();
+}
+
+// MIDI data byte: integer 0-127, fallback if empty or not a number
+function normalizeMidiValue(rawValue, fallback) {
+  const trimmedValue = `${rawValue ?? ''}`.trim();
+  if (trimmedValue === '') return String(fallback);
+
+  const numericValue = Number(trimmedValue);
+  if (!Number.isFinite(numericValue)) return String(fallback);
+
+  const clampedValue = Math.max(0, Math.min(127, Math.floor(numericValue)));
+  return String(clampedValue);
+}
+
+// Rebuilds the MIDI commands from the form: [MMC_*] or [command, value 1, value 2]
+function updateMidiFields(slot, shouldRender = true) {
+  const keyData = getActiveKeyData();
+  if (!keyData) return;
+
+  const midiSelect = getSlotElement('field-midi-cmd', slot);
+  const midiCmd = midiSelect ? midiSelect.value : 'NOTE_ON';
+
+  if (midiCmd.startsWith('MMC_')) {
+    setActionCommands(keyData, slot, [midiCmd]);
+  } else {
+    const v1Input = getSlotElement('field-midi-v1', slot);
+    const v2Input = getSlotElement('field-midi-v2', slot);
+    setActionCommands(keyData, slot, [midiCmd, v1Input ? v1Input.value : '', v2Input ? v2Input.value : '']);
+  }
+
+  markDirty();
+  if (shouldRender) renderEditorPanel();
+}
+
+/* The MIDI channel is a global setting: the hint shows the current channel
+   with a link to the settings */
+function renderMidiChannelHint(slot, isMMC) {
+  const hint = getSlotElement('midi-channel-hint', slot);
+  if (!hint) return;
+
+  hint.innerHTML = isMMC
+    ? 'MMC ignores the channel.'
+    : `Sent on channel ${normalizeMidiChannel(state.midi_channel)}. ` +
+      `<button type="button" class="link" onclick="openSettings('midi')">Change…</button>`;
+}
+
+function finalizeMidiField(baseFieldId, fallback, slot) {
+  const field = getSlotElement(baseFieldId, slot);
+  if (!field) return;
+
+  field.value = normalizeMidiValue(field.value, fallback);
+  updateMidiFields(slot, false);
+}
+
+function stepMidiField(baseFieldId, delta, fallback, slot) {
+  const field = getSlotElement(baseFieldId, slot);
+  if (!field) return;
+
+  const current = Number(normalizeMidiValue(field.value, fallback));
+  field.value = normalizeMidiValue(current + delta, fallback);
+  updateMidiFields(slot, false);
+}
+
+/* ============================================================
+   12b. KEY COLOUR PICKERS (device settings dialog)
+   ============================================================ */
+function swatchMarkup(target, label, hex) {
+  return `<label class="swatch">
+      <input type="color" value="${hex}" title="${label}"
+             oninput="updateKeyColor('${target}', this.value)">
+      <span>${label}</span>
+    </label>`;
+}
+
+function renderColorGrid() {
+  const pageHost = $('color-page');
+  const keysHost = $('color-grid');
+  if (!pageHost || !keysHost) return;
+
+  pageHost.innerHTML = swatchMarkup('page', 'PAGE', state.key_colors.page_key);
+
+  // Column-major order, as on the device
+  keysHost.innerHTML = state.key_colors.keys
+    .map((hex, index) => swatchMarkup(`${idFromIndex(index)}`, `K${idFromIndex(index)}`, hex))
+    .join('');
+}
+
+function updateKeyColor(target, value) {
+  const hex = normalizeHexColor(value);
+
+  if (target === 'page') {
+    state.key_colors.page_key = hex;
+  } else {
+    const index = indexFromId(target);
+    if (!Number.isInteger(index) || index < 0 || index >= KEY_COUNT) return;
+    state.key_colors.keys[index] = hex;
+  }
+
+  storeKeyColors();
+  renderHardwareView();
+}
+
+function resetKeyColors() {
+  state.key_colors = defaultKeyColors();
+  storeKeyColors();
+  renderColorGrid();
+  renderHardwareView();
+  toast('Colours reset.', 'ok');
+}
+
+/* ============================================================
+   13. JSON EXPORT / IMPORT
+   Exported files use schema field order and a 2 space indent.
+   Key colours are not included.
+   ============================================================ */
+/* Builds the export object: device-wide settings first, then the pages */
+function buildOrderedState() {
+  return {
+    profile_name: state.profile_name,
+    keyboard_layout: normalizeKeyboardLayout(state.keyboard_layout),
+    midi_channel: normalizeMidiChannel(state.midi_channel),
+    page_key_mode: normalizePageKeyMode(state.page_key_mode),
+    standby_enabled: Boolean(state.standby_enabled),
+    standby_time: state.standby_time,
+    pages: state.pages.map((page, pageIdx) => ({
+      page_id: idFromIndex(pageIdx),
+      name: page.name,
+      visible: Boolean(page.visible),
+      keys: page.keys.map((key, keyIdx) => normalizeKey(key, idFromIndex(keyIdx)))
+    }))
+    // key_colors is intentionally not exported
+  };
+}
+
+/* Saves the profile through a "Save as" dialog where supported (File System
+   Access API, Chromium based desktop browsers), otherwise as a regular
+   download */
+async function exportJSON() {
+  const filename = state.profile_name.toLowerCase().replace(/[^a-z0-9]/gi, '_') || "key_config";
+  const jsonString = JSON.stringify(buildOrderedState(), null, 2);
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    let handle = null;
+
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: `${filename}.json`,
+        types: [{
+          description: 'MacroPad configuration',
+          accept: { 'application/json': ['.json'] }
+        }]
+      });
+    } catch (err) {
+      // Dialog cancelled by the user
+      if (err && err.name === 'AbortError') return;
+      // Picker unavailable: use the download fallback
+      handle = null;
+    }
+
+    if (handle) {
+      try {
+        const writable = await handle.createWritable();
+        await writable.write(jsonString);
+        await writable.close();
+
+        markSaved();
+        toast(`Configuration saved as ${handle.name}`, 'ok');
+      } catch (err) {
+        toast('That file could not be written. Pick another location and try again.', 'err');
+      }
+      return;
+    }
+  }
+
+  downloadJSONFile(filename, jsonString);
+}
+
+/* Download fallback through a temporary <a download> link */
+function downloadJSONFile(filename, jsonString) {
+  markSaved();
+
+  const blob = new Blob([jsonString], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+
+  const downloadAnchor = document.createElement('a');
+  downloadAnchor.href = url;
+  downloadAnchor.download = `${filename}.json`;
+
+  document.body.appendChild(downloadAnchor);
+  downloadAnchor.click();
+
+  document.body.removeChild(downloadAnchor);
+  URL.revokeObjectURL(url);
+
+  toast(`Configuration exported as ${filename}.json`, 'ok');
+}
+
+/* Loads a profile from a JSON file (header Import or welcome Upload button) */
+function handleFileImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function (event) {
+    try {
+      const imported = JSON.parse(event.target.result);
+      if (typeof imported.profile_name !== 'string' || !imported.pages) {
+        toast('That file is not a valid MacroPad configuration profile.', 'err');
+        return;
+      }
+
+      state = {
+        ...state,
+        ...imported,
+        profile_name: imported.profile_name,
+        // Settings missing from the file get their default values
+        keyboard_layout: normalizeKeyboardLayout(imported.keyboard_layout),
+        midi_channel: normalizeMidiChannel(imported.midi_channel),
+        page_key_mode: normalizePageKeyMode(imported.page_key_mode),
+        standby_enabled: imported.standby_enabled ?? false,
+        standby_time: typeof imported.standby_time === 'number'
+          ? imported.standby_time
+          : parseStandbyTimeValue(imported.standby_time || '02:30'),
+        pages: imported.pages || state.pages,
+        // Key colours come from this browser; key_colors in the file is ignored
+        key_colors: state.key_colors
+      };
+
+      syncKeyboardLayoutControl();
+      syncMidiChannelControl();
+      syncStandbyControlsFromState();
+
+      activePageIndex = 0;
+      activeKeyIndex = 0;
+      pageMenuOpen = false;
+      hasUnsavedChanges = false;
+
+      sanitizeState();
+      syncProfileNameControl();
+      syncPageKeyModeControls();
+      renderAll();
+      // The welcome dialog closes only once a valid profile is loaded
+      closeWelcome();
+      toast('Profile loaded.', 'ok');
+    } catch (err) {
+      toast('Could not read that file — invalid JSON.', 'err');
+    } finally {
+      e.target.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ============================================================
+   14. WELCOME
+   Startup dialog: upload a profile, start from scratch or load
+   the example.
+   ============================================================ */
+function openWelcome() {
+  show($('welcome-overlay'), true);
+  requestAnimationFrame(() => $('welcome-upload').focus());
+}
+
+function closeWelcome() {
+  show($('welcome-overlay'), false);
+}
+
+function welcomeIsOpen() {
+  return !$('welcome-overlay').hidden;
+}
+
+function setupWelcome() {
+  // Reuses the header Import file input (same parsing and validation)
+  $('welcome-upload').addEventListener('click', () => $('import-json').click());
+
+  $('welcome-blank').addEventListener('click', () => {
+    applyProfile(blankProfile());
+    closeWelcome();
+  });
+
+  $('welcome-example').addEventListener('click', () => {
+    applyProfile(exampleProfile());
+    closeWelcome();
+  });
+}
+
+/* ============================================================
+   15. SETTINGS DIALOG
+   ============================================================ */
+/* Syncs the layout select (native value + custom trigger) with state */
+function syncKeyboardLayoutControl() {
+  const selectEl = $('keyboard-layout');
+  if (!selectEl) return;
+
+  selectEl.value = normalizeKeyboardLayout(state.keyboard_layout);
+  syncCustomSelectUI(selectEl);
+}
+
+/* Generates the 16 channel options, for the native <select> and the custom
+   menu. Must run before setupAllSelects(), which binds the option buttons */
+function populateMidiChannelSelect() {
+  const selectEl = $('midi-channel');
+  if (!selectEl) return;
+
+  const menu = selectEl.closest('.select')?.querySelector('.menu');
+  const channels = [];
+  for (let channel = MIDI_CHANNEL_MIN; channel <= MIDI_CHANNEL_MAX; channel++) channels.push(channel);
+
+  selectEl.innerHTML = channels
+    .map(channel => `<option value="${channel}">Channel ${channel}</option>`).join('');
+
+  if (menu) {
+    menu.innerHTML = channels
+      .map(channel => `<button type="button" class="opt" data-value="${channel}">Channel ${channel}</button>`).join('');
+  }
+
+  syncMidiChannelControl();
+}
+
+function syncMidiChannelControl() {
+  const selectEl = $('midi-channel');
+  if (!selectEl) return;
+
+  selectEl.value = `${normalizeMidiChannel(state.midi_channel)}`;
+  syncCustomSelectUI(selectEl);
+}
+
+/* The key editor shows the channel in its MIDI hint, so it is re-rendered */
+function updateMidiChannel(value) {
+  const nextChannel = normalizeMidiChannel(value);
+  if (nextChannel === state.midi_channel) return;
+
+  state.midi_channel = nextChannel;
+  markDirty();
+  syncMidiChannelControl();
+  renderEditorPanel();
+}
+
+/* The dialog reopens on the last tab used */
+let activeSettingsTab = 'keyboard';
+
+function showSettingsTab(name) {
+  const nav = $('settings-nav');
+  if (!nav) return;
+
+  // Close any menu left open in the previous tab
+  closeAllSelects();
+  releaseMenuSpace();
+
+  activeSettingsTab = name;
+  nav.querySelectorAll('.snav').forEach(button => {
+    button.classList.toggle('is-on', button.dataset.tab === name);
+  });
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.hidden = tab.dataset.tab !== name;
+  });
+
+  const pane = $('settings-pane');
+  if (pane) pane.scrollTop = 0;
+}
+
+/* Greys out the timeout field while standby is off */
+function syncStandbyControls() {
+  const field = $('standby-time-field');
+  if (field) field.classList.toggle('is-off', !state.standby_enabled);
+}
+
+/* Writes the standby values from state into their inputs (boot, import,
+   welcome) */
+function syncStandbyControlsFromState() {
+  const toggle = $('standby-enabled');
+  if (toggle) toggle.checked = Boolean(state.standby_enabled);
+
+  const timeInput = $('standby-time-input');
+  if (timeInput) timeInput.value = formatStandbyTimeValue(state.standby_time);
+
+  syncStandbyControls();
+}
+
+/* Opens the dialog on the given tab (default: the last one used) */
+function openSettings(tab) {
+  syncStandbyControls();
+  syncKeyboardLayoutControl();
+  syncMidiChannelControl();
+  syncPageKeyModeControls();
+  renderColorGrid();
+  showSettingsTab(tab || activeSettingsTab);
+  show($('settings-overlay'), true);
+}
+
+function closeSettings() {
+  show($('settings-overlay'), false);
+}
+
+function setupSettingsDialog() {
+  const overlay = $('settings-overlay');
+
+  $('settings-button').addEventListener('click', (event) => {
+    event.stopPropagation();
+    openSettings();
+  });
+
+  $('settings-nav').querySelectorAll('.snav').forEach(button => {
+    button.addEventListener('click', () => showSettingsTab(button.dataset.tab));
+  });
+
+  $('settings-close').addEventListener('click', closeSettings);
+  $('settings-done').addEventListener('click', closeSettings);
+  $('colors-reset').addEventListener('click', resetKeyColors);
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeSettings();
+  });
+}
+
+/* ============================================================
+   16. BOOT
+   ============================================================ */
+/* Document-wide click and Escape handling: closes menus, the page menu,
+   dialogs and an active shortcut capture */
+function setupGlobalDismiss() {
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.select')) {
+      closeAllSelects();
+      releaseMenuSpace();
+    }
+
+    // A click outside the capture button cancels the recording
+    if (captureSession && !event.target.closest('.capture-btn')) stopShortcutCapture();
+
+    // Key code results close unless the click is on their search field
+    [1, 2].forEach(slot => {
+      const searchBox = getSlotElement('key-search', slot);
+      const dropdown = getSlotElement('key-search-results', slot);
+      if (!dropdown || dropdown.hidden) return;
+
+      if (event.target !== searchBox && !dropdown.contains(event.target)) {
+        dropdown.hidden = true;
+        releaseMenuSpace();
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+
+    // The welcome dialog requires a choice and cannot be dismissed
+    if (welcomeIsOpen()) return;
+
+    if (!$('confirm-overlay').hidden) { closeConfirm(false); return; }
+    if (!$('settings-overlay').hidden) { closeSettings(); return; }
+    if (pageMenuOpen) { closePageMenu(); return; }
+
+    closeAllSelects();
+    closeKeycodeMenus();
+    releaseMenuSpace();
+  });
+}
+
+function setupFocusRing() {
+  const root = document.documentElement;
+
+  // Tab turns focus rings on (except while recording a shortcut)
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' && !captureSession) root.classList.add('kbd-nav');
+  }, true);
+
+  // Any pointer input turns them off
+  window.addEventListener('pointerdown', () => root.classList.remove('kbd-nav'), true);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Build the device preview and both action forms before the first render
+  buildDevice();
+  $('action-slot-1').innerHTML = actionFormMarkup(1);
+  $('action-slot-2').innerHTML = actionFormMarkup(2);
+  populateMidiChannelSelect();
+  setupAllSelects();
+
+  // Blank profile behind the welcome dialog until the user picks an option
+  state = blankProfile();
+
+  // Profile name: ASCII only; case and length are free, since it is never
+  // shown on the device
+  const profileInput = $('profile-name-input');
+  profileInput.value = state.profile_name;
+  profileInput.addEventListener('input', (e) => {
+    state.profile_name = applyTextInput(e.target, toAsciiText);
+    markDirty();
+  });
+
+  // Keyboard layout
+  syncKeyboardLayoutControl();
+  $('keyboard-layout').addEventListener('change', (e) => {
+    state.keyboard_layout = normalizeKeyboardLayout(e.target.value);
+    markDirty();
+  });
+
+  // MIDI channel
+  syncMidiChannelControl();
+  $('midi-channel').addEventListener('change', (e) => updateMidiChannel(e.target.value));
+
+  // Page key behaviour
+  syncPageKeyModeControls();
+  document.querySelectorAll('input[name="page-key-mode"]').forEach(input => {
+    input.addEventListener('change', () => updatePageKeyMode(input.value));
+  });
+
+  // Standby
+  syncStandbyControlsFromState();
+
+  const standbyToggle = $('standby-enabled');
+  standbyToggle.addEventListener('change', (e) => {
+    state.standby_enabled = e.target.checked;
+    syncStandbyControls();
+    markDirty();
+  });
+
+  const standbyTimeInput = $('standby-time-input');
+  standbyTimeInput.addEventListener('input', (e) => {
+    const formatted = formatStandbyTimeInput(e.target.value);
+    e.target.value = formatted;
+    state.standby_time = parseStandbyTimeValue(formatted);
+    markDirty();
+  });
+  standbyTimeInput.addEventListener('blur', (e) => {
+    const normalized = formatStandbyTimeValue(parseStandbyTimeValue(e.target.value));
+    state.standby_time = parseStandbyTimeValue(normalized);
+    e.target.value = normalized;
+  });
+
+  // Import / unload guard
+  $('import-json').addEventListener('change', handleFileImport);
+  window.addEventListener('beforeunload', handleBeforeUnload);
+
+  // Confirm dialog
+  $('confirm-ok').addEventListener('click', () => closeConfirm(true));
+  $('confirm-cancel').addEventListener('click', () => closeConfirm(false));
+  $('confirm-overlay').addEventListener('click', (event) => {
+    if (event.target === $('confirm-overlay')) closeConfirm(false);
+  });
+
+  setupSettingsDialog();
+  setupGlobalDismiss();
+  setupFocusRing();
+  setupStageDeselect();
+  setupWelcome();
+
+  restoreStoredKeyColors();
+  sanitizeState();
+  syncProfileNameControl();
+  renderAll();
+
+  openWelcome();
+
+  // Re-enable transitions once the first frame has been painted
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => document.body.classList.remove('preload'));
+  });
+});
+</script>
+</body>
+</html>
