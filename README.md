@@ -2,7 +2,7 @@
 
 An open-source, customizable macro keyboard and Stream Deck alternative built from scratch for around €30. Powered by a Raspberry Pi Pico, it features 12 mechanical macro keys, a dedicated page navigation button, 5 OLED displays for dynamic key labels, and a standalone HTML web configurator that stores configuration files on the internal MicroSD card of the keyboard.
 
-Watch the full project video on YouTube: *Link coming soon*
+Watch the full project video on YouTube: https://youtu.be/zRMKe-vT5Og
 
 
 ## Description
